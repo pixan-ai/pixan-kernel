@@ -1,0 +1,8 @@
+# Railway service config. Point the service at your CLIENT repo (which builds FROM the kernel).
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# When the heartbeat exits 1 (Claude died), Railway brings the container back up.
+restartPolicyType = "ALWAYS"

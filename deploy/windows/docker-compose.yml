@@ -1,0 +1,15 @@
+# One agent on a Windows laptop (WSL2 + Docker Desktop).
+services:
+  agent:
+    image: ${CLIENT_IMAGE:?set CLIENT_IMAGE in .env}
+    container_name: ${AGENT_NAME:-agent}
+    restart: always
+    env_file: .env
+    volumes:
+      - agent-data:/data
+    # Needed only when KERNEL_FIREWALL=1 (optional egress allowlist).
+    cap_add: [NET_ADMIN, NET_RAW]
+    mem_limit: 2g
+volumes:
+  agent-data:
+    name: ${AGENT_NAME:-agent}-data

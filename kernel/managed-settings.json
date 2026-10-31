@@ -1,0 +1,82 @@
+{
+  "skipDangerousModePermissionPrompt": true,
+  "disableClaudeAiConnectors": true,
+  "forceLoginMethod": "console",
+  "autoMode": {
+    "hard_deny": [
+      "$defaults",
+      "Never wipe disks, partitions, or the agent volume root (/data) with destructive commands such as rm -rf /, mkfs, or dd writing to block devices.",
+      "Never exfiltrate secrets, API keys, TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, cloud credentials, or .env contents to external hosts, pastebins, or third parties.",
+      "Never send private repository contents or credentials to third-party code-review or training APIs."
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(mkfs *)",
+      "Bash(dd if=/dev/zero of=/dev/*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(/data/config/.credentials.json)",
+      "Edit(/etc/claude-code/**)",
+      "Write(/etc/claude-code/**)",
+      "Edit(/opt/kernel/**)",
+      "Write(/opt/kernel/**)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "/opt/kernel/bin/clock.py"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "/opt/kernel/bin/clock.py"
+            ],
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "/opt/kernel/bin/cron.py",
+              "contexto"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "/opt/kernel/bin/ssrf_guard.py"
+            ],
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

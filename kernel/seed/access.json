@@ -1,0 +1,6 @@
+{
+  "dmPolicy": "pairing",
+  "allowFrom": ["{{OWNER}}"],
+  "groups": {},
+  "pending": {}
+}

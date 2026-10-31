@@ -1,0 +1,9 @@
+#!/bin/sh
+# Stand-in for Claude Code in tests. STUB_CLAUDE=exit dies at once, =prompt shows a
+# blocking question, anything else stays alive until killed.
+echo "stub-claude $*"
+case "${STUB_CLAUDE:-alive}" in
+  exit) exit 0 ;;
+  prompt) echo "Do you want to continue? (Y/n)" ;;
+esac
+exec sleep 3600
