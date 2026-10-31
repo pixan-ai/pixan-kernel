@@ -39,9 +39,9 @@ class Base(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
-    def add_daily(self, task_id="orden-compra", hhmm="09:00", created="2026-09-13 12:00", **kw):
+    def add_daily(self, task_id="purchase-order", hhmm="09:00", created="2026-09-13 12:00", **kw):
         h, m = hhmm.split(":")
-        return cron.add(task_id, "123", "Alice", "Da seguimiento a la OC-4512",
+        return cron.add(task_id, "123", "Alice", "Follow up on PO-4512",
                         schedule=f"{int(m)} {int(h)} * * *", now=at(created), **kw)
 
 
@@ -71,15 +71,15 @@ class TestSchedule(Base):
 class TestAdd(Base):
     def test_validates_input_and_limits(self):
         with self.assertRaises(ValueError):
-            cron.add("X", "123", "Alice", "hola", schedule="0 9 * * *")      # bad id
+            cron.add("X", "123", "Alice", "hello", schedule="0 9 * * *")      # bad id
         with self.assertRaises(ValueError):
-            cron.add("ok-id", "abc", "Alice", "hola", schedule="0 9 * * *")  # bad chat
+            cron.add("ok-id", "abc", "Alice", "hello", schedule="0 9 * * *")  # bad chat
         with self.assertRaises(ValueError):
-            cron.add("ok-id", "123", "Alice", "hola")                         # no schedule nor at
+            cron.add("ok-id", "123", "Alice", "hello")                         # no schedule nor at
         with mock.patch.dict(os.environ, {"CRON_MAX_TASKS": "1"}):
-            self.add_daily("una")
+            self.add_daily("one")
             with self.assertRaises(ValueError):
-                self.add_daily("dos")
+                self.add_daily("two")
 
     def test_duplicate_id_is_refused(self):
         self.add_daily()
@@ -98,12 +98,12 @@ class TestDue(Base):
             cron.tick(at("2026-09-14 09:00"), launch)
             cron.tick(at("2026-09-14 09:30"), launch)
             cron.tick(at("2026-09-15 09:00"), launch)
-        self.assertEqual(launched, ["orden-compra", "orden-compra"])
+        self.assertEqual(launched, ["purchase-order", "purchase-order"])
 
     def test_a_missed_slot_runs_on_return_within_grace_only(self):
         self.add_daily(hhmm="05:00")
         tasks = cron.load()
-        self.assertEqual([t["id"] for _, t in cron.due(tasks, at("2026-09-14 06:30"))], ["orden-compra"])
+        self.assertEqual([t["id"] for _, t in cron.due(tasks, at("2026-09-14 06:30"))], ["purchase-order"])
         self.assertEqual(cron.due(tasks, at("2026-09-14 07:30")), [])
 
     def test_a_task_created_after_todays_slot_waits_for_tomorrow(self):
@@ -120,16 +120,16 @@ class TestDue(Base):
         self.assertEqual(len(cron.due(cron.load(), at("2026-09-14 09:00"))), 1)  # still pending
 
     def test_until_and_missed_one_shot_close_the_task(self):
-        self.add_daily("con-fin", until="2026-09-14")
-        cron.add("una-vez", "123", "Bob", "recuérdame", at="2026-09-14 10:00", now=at("2026-09-13 12:00"))
+        self.add_daily("with-end", until="2026-09-14")
+        cron.add("one-shot", "123", "Bob", "remind me", at="2026-09-14 10:00", now=at("2026-09-13 12:00"))
         tasks = cron.load()
         closed = cron.expire(tasks, at("2026-09-15 13:00"))
-        self.assertEqual(sorted(closed), ["con-fin", "una-vez"])
-        self.assertFalse(tasks["con-fin"]["enabled"])
+        self.assertEqual(sorted(closed), ["one-shot", "with-end"])
+        self.assertFalse(tasks["with-end"]["enabled"])
 
     def test_paused_tasks_do_not_run(self):
         self.add_daily()
-        cron.set_enabled("orden-compra", False)
+        cron.set_enabled("purchase-order", False)
         self.assertEqual(cron.due(cron.load(), at("2026-09-14 09:00")), [])
 
 
@@ -150,21 +150,21 @@ class TestRun(Base):
 
     def test_delivers_the_answer_through_the_runner_not_the_model(self):
         self.add_daily()
-        runner, calls = self.fake_claude("La OC-4512 sigue en tránsito.")
+        runner, calls = self.fake_claude("PO-4512 is still in transit.")
         send, sent = self.sender()
-        self.assertEqual(cron.run("orden-compra", at("2026-09-14 09:00"), runner, send), 0)
-        self.assertEqual(sent, [("123", "La OC-4512 sigue en tránsito.")])
+        self.assertEqual(cron.run("purchase-order", at("2026-09-14 09:00"), runner, send), 0)
+        self.assertEqual(sent, [("123", "PO-4512 is still in transit.")])
         cmd, kw = calls[0]
         self.assertEqual(cmd[:2], ["claude", "-p"])
-        self.assertIn("Da seguimiento a la OC-4512", cmd[-1])
-        task = cron.load()["orden-compra"]
-        self.assertEqual((task["runs"], task["last_status"]), (1, "entregada"))
+        self.assertIn("Follow up on PO-4512", cmd[-1])
+        task = cron.load()["purchase-order"]
+        self.assertEqual((task["runs"], task["last_status"]), (1, "delivered"))
 
     def test_job_runs_without_the_telegram_plugin(self):
         self.add_daily()
         runner, calls = self.fake_claude("ok")
         send, _ = self.sender()
-        cron.run("orden-compra", at("2026-09-14 09:00"), runner, send)
+        cron.run("purchase-order", at("2026-09-14 09:00"), runner, send)
         job_cfg = calls[0][1]["env"]["CLAUDE_CONFIG_DIR"]
         with open(os.path.join(job_cfg, "settings.json")) as f:
             settings = json.load(f)
@@ -176,40 +176,40 @@ class TestRun(Base):
         self.add_daily()
         runner, _ = self.fake_claude(cron.QUIET)
         send, sent = self.sender()
-        cron.run("orden-compra", at("2026-09-14 09:00"), runner, send)
+        cron.run("purchase-order", at("2026-09-14 09:00"), runner, send)
         self.assertEqual(sent, [])
-        self.assertEqual(cron.load()["orden-compra"]["last_status"], "sin novedad")
+        self.assertEqual(cron.load()["purchase-order"]["last_status"], "no update")
 
     def test_the_agent_can_close_its_own_task(self):
         self.add_daily()
-        runner, _ = self.fake_claude(f"La OC-4512 ya se entregó.\n{cron.STOP}")
+        runner, _ = self.fake_claude(f"PO-4512 was delivered.\n{cron.STOP}")
         send, sent = self.sender()
-        cron.run("orden-compra", at("2026-09-14 09:00"), runner, send)
-        self.assertEqual(sent, [("123", "La OC-4512 ya se entregó.")])
-        self.assertFalse(cron.load()["orden-compra"]["enabled"])
+        cron.run("purchase-order", at("2026-09-14 09:00"), runner, send)
+        self.assertEqual(sent, [("123", "PO-4512 was delivered.")])
+        self.assertFalse(cron.load()["purchase-order"]["enabled"])
 
     def test_failure_tells_the_chat_instead_of_going_silent(self):
         self.add_daily()
         runner, _ = self.fake_claude(exc=subprocess.TimeoutExpired("claude", 900))
         send, sent = self.sender()
-        self.assertEqual(cron.run("orden-compra", at("2026-09-14 09:00"), runner, send), 1)
+        self.assertEqual(cron.run("purchase-order", at("2026-09-14 09:00"), runner, send), 1)
         self.assertEqual(len(sent), 1)
-        self.assertIn("orden-compra", sent[0][1])
-        self.assertTrue(cron.load()["orden-compra"]["enabled"])  # a failure does not cancel it
+        self.assertIn("purchase-order", sent[0][1])
+        self.assertTrue(cron.load()["purchase-order"]["enabled"])  # a failure does not cancel it
 
     def test_previous_report_is_given_to_the_next_run(self):
         self.add_daily()
         send, _ = self.sender()
-        cron.run("orden-compra", at("2026-09-14 09:00"), self.fake_claude("En tránsito.")[0], send)
+        cron.run("purchase-order", at("2026-09-14 09:00"), self.fake_claude("In transit.")[0], send)
         runner, calls = self.fake_claude(cron.QUIET)
-        cron.run("orden-compra", at("2026-09-15 09:00"), runner, send)
-        self.assertIn("En tránsito.", calls[0][0][-1])
+        cron.run("purchase-order", at("2026-09-15 09:00"), runner, send)
+        self.assertIn("In transit.", calls[0][0][-1])
 
     def test_one_shot_disables_after_running(self):
-        cron.add("una-vez", "123", "Bob", "recuérdame", at="2026-09-14 10:00", now=at("2026-09-13 12:00"))
+        cron.add("one-shot", "123", "Bob", "remind me", at="2026-09-14 10:00", now=at("2026-09-13 12:00"))
         send, _ = self.sender()
-        cron.run("una-vez", at("2026-09-14 10:00"), self.fake_claude("Recordatorio")[0], send)
-        self.assertFalse(cron.load()["una-vez"]["enabled"])
+        cron.run("one-shot", at("2026-09-14 10:00"), self.fake_claude("Reminder")[0], send)
+        self.assertFalse(cron.load()["one-shot"]["enabled"])
 
 
 class TestWiring(unittest.TestCase):

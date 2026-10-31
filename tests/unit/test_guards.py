@@ -1,4 +1,4 @@
-"""Guardas y hooks del seed: SSRF, send_rich, clock, hard_deny, hooks en settings."""
+"""Seed guards and hooks: SSRF, send_rich, clock, hard_deny, hooks in settings."""
 from __future__ import annotations
 
 import json
@@ -92,7 +92,7 @@ class TestSettingsP1(unittest.TestCase):
 
 
 class TestClockHook(unittest.TestCase):
-    def test_user_prompt_injects_cdmx(self):
+    def test_user_prompt_injects_local_time(self):
         proc = subprocess.run(
             [sys.executable, str(SCRIPTS / "clock.py")],
             input='{"hook_event_name":"UserPromptSubmit"}',
@@ -104,8 +104,8 @@ class TestClockHook(unittest.TestCase):
         ctx = data["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
         self.assertIn("America/Mexico_City", ctx)
-        self.assertNotIn("UTC del canal", ctx.replace("No uses timestamps UTC del canal", "OK"))
-        self.assertTrue("CST" in ctx or "CDT" in ctx or "America/Mexico_City" in ctx)
+        self.assertIn("Do not use UTC timestamps", ctx)
+        self.assertTrue("CST" in ctx or "CDT" in ctx)
 
     def test_session_start_event_name(self):
         proc = subprocess.run(
@@ -147,8 +147,8 @@ class TestSendRichMessage(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory()
         self.png = Path(self.td.name) / "graf.png"
         self.png.write_bytes(b"\x89PNG fake")
-        # El chat de prueba tiene que estar permitido: send_rich comprueba la
-        # lista de acceso igual que la tool `reply` del canal.
+        # The test chat must be allowed: send_rich checks the access list
+        # just like the channel's `reply` tool.
         tg = Path(self.td.name) / "channels/telegram"
         tg.mkdir(parents=True)
         (tg / "access.json").write_text(json.dumps({"allowFrom": ["42"], "groups": {}}))
@@ -219,7 +219,7 @@ class TestSendRichMessage(unittest.TestCase):
 
 
 class TestDestinatarioPermitido(unittest.TestCase):
-    """send_rich habla directo al Bot API: sin este candado se salta la lista de acceso."""
+    """send_rich talks to the Bot API directly: without this lock it bypasses the access list."""
 
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))
@@ -239,22 +239,22 @@ class TestDestinatarioPermitido(unittest.TestCase):
 
     def test_permite_a_quien_esta_en_allowfrom(self):
         with unittest.mock.patch.dict(os.environ, self.env):
-            self.sr.assert_chat_permitido("123456789")
+            self.sr.assert_chat_allowed("123456789")
 
     def test_permite_un_grupo_dado_de_alta(self):
         with unittest.mock.patch.dict(os.environ, self.env):
-            self.sr.assert_chat_permitido("-100123")
+            self.sr.assert_chat_allowed("-100123")
 
     def test_rechaza_a_un_desconocido(self):
         with unittest.mock.patch.dict(os.environ, self.env):
             with self.assertRaises(SystemExit) as e:
-                self.sr.assert_chat_permitido("999999")
-        self.assertIn("no está en la lista de acceso", str(e.exception))
+                self.sr.assert_chat_allowed("999999")
+        self.assertIn("is not in the access list", str(e.exception))
 
     def test_sin_access_json_no_manda_a_ciegas(self):
         with unittest.mock.patch.dict(os.environ, {"TELEGRAM_STATE_DIR": "/no/existe"}):
             with self.assertRaises(SystemExit):
-                self.sr.assert_chat_permitido("123456789")
+                self.sr.assert_chat_allowed("123456789")
 
     def test_el_cli_corta_con_exit_2(self):
         env = {**os.environ, **self.env, "TELEGRAM_BOT_TOKEN": "t"}
@@ -262,7 +262,7 @@ class TestDestinatarioPermitido(unittest.TestCase):
                             "--chat-id", "999999", "--markdown", "x"],
                            capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 2)
-        self.assertIn("lista de acceso", r.stderr)
+        self.assertIn("access list", r.stderr)
 
 
 if __name__ == "__main__":

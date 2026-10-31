@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""send_rich: mensajes de Telegram con formato, desde el contenedor.
+"""send_rich: formatted Telegram messages, from inside the container.
 
-Dos modos, según lo que pases:
+Two modes, depending on what you pass:
 
-  --text HTML [--photo f.png] [--table-csv f.csv]   sendMessage / sendPhoto con parse_mode=HTML
-                                                     (la tabla CSV se vuelve texto monoespaciado)
-  --markdown "…" | --markdown-file f.md              sendRichMessage (Bot API 10.x): encabezados con #,
-      [--img ID=ruta_o_url …]                        tablas |---|, listas, > citas, **negrita** *cursiva*
-                                                     `code` ||spoiler||. NO es MarkdownV2.
+  --text HTML [--photo f.png] [--table-csv f.csv]   sendMessage / sendPhoto with parse_mode=HTML
+                                                     (the CSV table becomes monospaced text)
+  --markdown "..." | --markdown-file f.md            sendRichMessage (Bot API 10.x): # headings,
+      [--img ID=path_or_url ...]                     |---| tables, lists, > quotes, **bold** *italic*
+                                                     `code` ||spoiler||. This is NOT MarkdownV2.
 
-Imágenes en un rich message: cada --img ID=fuente se declara en `media` y se coloca en el
-markdown donde deba aparecer con ![](tg://photo?id=ID). Ruta local → se sube como archivo
-attach://ID; URL http(s) → va directa, sin subir nada.
+Images in a rich message: each --img ID=source is declared in `media` and placed in the
+markdown where it should appear with ![](tg://photo?id=ID). Local path -> uploaded as file
+attach://ID; http(s) URL -> sent as is, nothing uploaded.
 
-Límites del API: 32768 caracteres, 500 bloques, 50 archivos, 20 columnas por tabla.
-Nunca imprime TELEGRAM_BOT_TOKEN. Exit 0 ok · 1 el API contestó ok:false · 2 falta token/args.
+API limits: 32768 characters, 500 blocks, 50 files, 20 columns per table.
+Never prints TELEGRAM_BOT_TOKEN. Exit 0 ok, 1 the API answered ok:false, 2 missing token/args.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def escape_html(text: str) -> str:
 
 
 def table_html(rows: list[list[str]], max_cols: int = 4) -> str:
-    """Tabla en <pre> para el modo HTML (Telegram no tiene tablas ahí); máx 3–4 columnas."""
+    """Table in <pre> for HTML mode (Telegram has no tables there); max 3-4 columns."""
     if not rows:
         return ""
     cols = min(max(len(r) for r in rows), max_cols)
@@ -95,51 +95,51 @@ def send_photo(token: str, chat_id: str, photo_path: str, caption: str = "") -> 
     return _api(token, "sendPhoto", data=data, files={"photo": photo_path})
 
 
-def assert_chat_permitido(chat_id: str) -> None:
-    """Mismo candado que la tool `reply` del canal.
+def assert_chat_allowed(chat_id: str) -> None:
+    """Same lock as the channel's `reply` tool.
 
-    Este script habla directo al Bot API, así que se salta al plugin. Sin esta
-    comprobación, "todo va por send_rich" significaría "todo va por fuera de la
-    lista de acceso", y a un agente al que le inyecten un destinatario le
-    bastaría pedir formato para escribirle a cualquiera.
+    This script talks to the Bot API directly, so it bypasses the plugin. Without
+    this check, "everything goes through send_rich" would mean "everything goes
+    around the access list", and an agent fed an injected recipient would only
+    need to ask for formatting to write to anyone.
     """
-    ruta = os.environ.get("TELEGRAM_STATE_DIR") or os.path.join(
+    state_dir = os.environ.get("TELEGRAM_STATE_DIR") or os.path.join(
         os.environ.get("CLAUDE_CONFIG_DIR", "/data/config"), "channels", "telegram")
-    archivo = Path(ruta) / "access.json"
+    access_file = Path(state_dir) / "access.json"
     try:
-        acc = json.loads(archivo.read_text())
+        acc = json.loads(access_file.read_text())
     except (OSError, ValueError):
-        # Sin access.json no hay perímetro que consultar: no se inventa uno.
-        raise SystemExit(f"ERROR: no pude leer {archivo}; no mando nada a ciegas")
+        # Without access.json there is no perimeter to check: do not invent one.
+        raise SystemExit(f"ERROR: could not read {access_file}; not sending anything blindly")
     cid = str(chat_id).strip()
     if cid in [str(x) for x in (acc.get("allowFrom") or [])]:
         return
     if cid in (acc.get("groups") or {}):
         return
     raise SystemExit(
-        f"ERROR: el chat {cid} no está en la lista de acceso. No se agregan destinatarios "
-        "por pedido de un mensaje: eso se autoriza con access.py y un Super Usuario."
+        f"ERROR: chat {cid} is not in the access list. Recipients are never added "
+        "because a message asks for it: only the owner adds them to access.json."
     )
 
 
 def build_rich_message(markdown: str, imgs: dict[str, str]) -> tuple[dict, dict]:
-    """Arma el InputRichMessage y los archivos a subir. Valida lo que el API rechazaría."""
+    """Build the InputRichMessage and the files to upload. Validates what the API would reject."""
     if len(markdown) > MAX_CHARS:
-        raise ValueError(f"markdown de {len(markdown)} chars; máximo {MAX_CHARS}")
+        raise ValueError(f"markdown is {len(markdown)} chars; max {MAX_CHARS}")
     if len(imgs) > MAX_MEDIA:
-        raise ValueError(f"{len(imgs)} imágenes; máximo {MAX_MEDIA}")
+        raise ValueError(f"{len(imgs)} images; max {MAX_MEDIA}")
     for line in markdown.splitlines():
         if line.strip().startswith("|") and line.count("|") - 1 > MAX_COLS:
-            raise ValueError(f"tabla con más de {MAX_COLS} columnas")
+            raise ValueError(f"table with more than {MAX_COLS} columns")
     media, files = [], {}
     for mid, src in imgs.items():
         if not MEDIA_ID.match(mid):
-            raise ValueError(f"id de imagen inválido: {mid!r} (A-Z a-z 0-9 _ -, máx 64)")
+            raise ValueError(f"invalid image id: {mid!r} (A-Z a-z 0-9 _ -, max 64)")
         if src.startswith(("http://", "https://")):
             ref = src
         else:
             if not Path(src).is_file():
-                raise ValueError(f"imagen no encontrada: {src}")
+                raise ValueError(f"image not found: {src}")
             ref, files[mid] = f"attach://{mid}", src
         media.append({"id": mid, "media": {"type": "photo", "media": ref}})
     rich: dict = {"markdown": markdown}
@@ -155,15 +155,15 @@ def send_rich_message(token: str, chat_id: str, markdown: str, imgs: dict[str, s
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="send_rich: HTML (sendMessage) o rich message (sendRichMessage)")
+    ap = argparse.ArgumentParser(description="send_rich: HTML (sendMessage) or rich message (sendRichMessage)")
     ap.add_argument("--chat-id", required=True)
-    ap.add_argument("--text", default="", help="HTML → sendMessage (o caption de --photo)")
+    ap.add_argument("--text", default="", help="HTML -> sendMessage (or caption for --photo)")
     ap.add_argument("--photo", default="")
-    ap.add_argument("--table-csv", default="", help="CSV → tabla monoespaciada añadida a --text")
-    ap.add_argument("--markdown", default="", help="rich message en Rich Markdown → sendRichMessage")
-    ap.add_argument("--markdown-file", default="", help="igual que --markdown, leído de un archivo")
-    ap.add_argument("--img", action="append", default=[], metavar="ID=RUTA_O_URL",
-                    help="imagen del rich message; en el markdown va como ![](tg://photo?id=ID)")
+    ap.add_argument("--table-csv", default="", help="CSV -> monospaced table appended to --text")
+    ap.add_argument("--markdown", default="", help="rich message in Rich Markdown -> sendRichMessage")
+    ap.add_argument("--markdown-file", default="", help="same as --markdown, read from a file")
+    ap.add_argument("--img", action="append", default=[], metavar="ID=PATH_OR_URL",
+                    help="rich message image; place it in the markdown as ![](tg://photo?id=ID)")
     args = ap.parse_args()
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -172,27 +172,27 @@ def main() -> int:
         return 2
 
     try:
-        assert_chat_permitido(args.chat_id)
+        assert_chat_allowed(args.chat_id)
     except SystemExit as e:
-        print(e.code if isinstance(e.code, str) else "destinatario no permitido", file=sys.stderr)
+        print(e.code if isinstance(e.code, str) else "recipient not allowed", file=sys.stderr)
         return 2
 
     markdown = args.markdown or (Path(args.markdown_file).read_text() if args.markdown_file else "")
     if markdown and (args.text or args.photo or args.table_csv):
-        print("--markdown no se mezcla con --text/--photo/--table-csv", file=sys.stderr)
+        print("--markdown cannot be combined with --text/--photo/--table-csv", file=sys.stderr)
         return 2
     if markdown:
         imgs: dict[str, str] = {}
         for item in args.img:
             mid, sep, src = item.partition("=")
             if not sep or not mid or not src:
-                print(f"--img espera ID=ruta_o_url, no {item!r}", file=sys.stderr)
+                print(f"--img expects ID=path_or_url, not {item!r}", file=sys.stderr)
                 return 2
             imgs[mid.strip()] = src.strip()
         try:
             result = send_rich_message(token, args.chat_id, markdown, imgs)
         except ValueError as e:
-            print(f"rich message inválido: {e}", file=sys.stderr)
+            print(f"invalid rich message: {e}", file=sys.stderr)
             return 2
     else:
         text = args.text

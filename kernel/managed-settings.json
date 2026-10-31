@@ -56,7 +56,7 @@
             "command": "python3",
             "args": [
               "/opt/kernel/bin/cron.py",
-              "contexto"
+              "context"
             ],
             "timeout": 10
           }

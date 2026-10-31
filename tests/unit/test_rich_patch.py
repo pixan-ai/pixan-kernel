@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests: parche de rich messages al puente de Telegram."""
+"""Unit tests: rich message patch for the Telegram bridge."""
 import os
 import sys
 import tempfile
@@ -8,8 +8,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "kernel", "bin"))
 from patch_rich_message import MARK, STAMP_MARK, patch, patch_all, patch_stamp  # noqa: E402
 
-# Forma minima del server.ts real: handlers tipados y luego la declaracion que
-# usamos de ancla.
+# Minimal shape of the real server.ts: typed handlers, then the declaration we
+# use as the anchor.
 SERVER = """bot.on('message:text', async ctx => {
   await handleInbound(ctx, ctx.message.text, undefined)
 })
@@ -59,7 +59,7 @@ class TestRichMessagePatch(unittest.TestCase):
         self.assertIn(MARK, out)
         self.assertIn("rich_message", out)
         self.assertIn("richToText", out)
-        # El handler debe quedar ANTES del ancla, no al final del archivo.
+        # The handler must go BEFORE the anchor, not at the end of the file.
         self.assertLess(out.index(MARK), out.index("type AttachmentMeta = {"))
 
     def test_patch_is_idempotent(self):
@@ -99,7 +99,7 @@ class TestRichMessagePatch(unittest.TestCase):
 
 
 class TestInboundStampPatch(unittest.TestCase):
-    """La hora del ultimo mensaje entregado: de ahi sale `cola=` en el latido."""
+    """Time of the last delivered message: the heartbeat derives `queue=` from it."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -116,7 +116,7 @@ class TestInboundStampPatch(unittest.TestCase):
         at = out.index(STAMP_MARK)
         self.assertIn("last-inbound", out)
         self.assertLess(at, out.index("method: 'notifications/claude/channel',"))
-        # No en el atajo de permisos: ese no le entrega un mensaje a la sesion.
+        # Not in the permission shortcut: that one does not deliver a message to the session.
         self.assertGreater(at, out.index("channel/permission"))
 
     def test_a_failed_write_never_breaks_delivery(self):

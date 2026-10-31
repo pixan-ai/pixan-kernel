@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code hook: inyecta la hora real America/Mexico_City.
+"""Claude Code hook: injects the real local time (TZ, default America/Mexico_City).
 
 SessionStart + UserPromptSubmit → additionalContext.
 Do NOT use Telegram/channel UTC timestamps; this is authoritative.
@@ -7,12 +7,13 @@ Do NOT use Telegram/channel UTC timestamps; this is authoritative.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 
-def _now_cdmx() -> str:
+def _now_local() -> str:
     try:
         now = datetime.now(ZoneInfo(os.environ.get("TZ") or "America/Mexico_City"))
         return now.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -31,11 +32,11 @@ def main() -> int:
         data = {}
     if event not in ("SessionStart", "UserPromptSubmit"):
         event = "UserPromptSubmit"
-    stamp = _now_cdmx()
+    stamp = _now_local()
     ctx = (
-        f"Hora real del sistema: {stamp} (America/Mexico_City). "
-        "Esta es la hora autoritativa. No uses timestamps UTC del canal "
-        "Telegram ni inventes la hora."
+        f"Real system time: {stamp} (America/Mexico_City). "
+        "This is the authoritative time. Do not use UTC timestamps from the "
+        "Telegram channel and do not make up the time."
     )
     out = {
         "hookSpecificOutput": {

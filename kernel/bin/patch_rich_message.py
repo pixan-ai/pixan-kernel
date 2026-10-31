@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Parcha el puente de Telegram para que entienda rich messages (Bot API 10.1).
+"""Patches the Telegram bridge so it understands rich messages (Bot API 10.1).
 
-Un mensaje enriquecido llega en `message.rich_message`, no en `message.text`.
-El plugin registra handlers por campo (`message:text`, `:photo`, `:voice`…) y
-la version de grammY que trae es anterior al campo, asi que ningun filtro lo
-reclama y el update se descarta **sin error y sin rastro**.
+A rich message arrives in `message.rich_message`, not in `message.text`.
+The plugin registers handlers per field (`message:text`, `:photo`, `:voice`...)
+and its bundled grammY predates the field, so no filter claims it and the
+update is dropped **without an error and without a trace**.
 
-Solo los agentes mandan `sendRichMessage` — las personas escriben texto plano —
-asi que el unico trafico que se rompe es el de agente a agente, en silencio.
+Only agents send `sendRichMessage` (people type plain text), so the only
+traffic that breaks is agent-to-agent, silently.
 
-Segundo parche, en el mismo pase: el puente deja la hora del ultimo mensaje
-que le entrego a la sesion en `$TELEGRAM_STATE_DIR/last-inbound`. El latido la
-compara con el transcript: si entro un mensaje y la sesion no escribio nada
-despues, esta en cola de verdad. Leerlo de la pantalla no sirve, porque el
-marcador `← telegram ·` se queda pintado despues de atendido.
+Second patch, in the same pass: the bridge writes the time of the last message
+it delivered to the session to `$TELEGRAM_STATE_DIR/last-inbound`. The
+heartbeat compares it with the transcript: if a message came in and the session
+wrote nothing afterwards, it is really queued. Reading the screen does not
+work, because the `← telegram ·` marker stays painted after it was handled.
 
-Idempotente: cada parche reconoce su propia marca y no vuelve a insertar.
+Idempotent: each patch recognizes its own mark and never inserts twice.
 """
+
 import glob
 import os
 import shutil
@@ -64,21 +65,23 @@ bot.on('message', async ctx => {
 
 
 STAMP_ANCHOR = "  mcp.notification({\n    method: 'notifications/claude/channel',\n"
-STAMP_MARK = "// --- kernel: hora del ultimo mensaje entregado"
+STAMP_MARK = "// --- kernel: time of the last message delivered"
+# Mark written by earlier releases; still recognized so old volumes are not patched twice.
+LEGACY_STAMP_MARK = "// --- pixan: hora del ultimo mensaje entregado"
 STAMP_PATCH = (
-    "  // --- kernel: hora del ultimo mensaje entregado a la sesion. El latido la\n"
-    "  // compara con el transcript para saber si un mensaje entro y nadie lo tomo.\n"
+    "  // --- kernel: time of the last message delivered to the session. The heartbeat\n"
+    "  // compares it with the transcript to tell whether a message came in and nobody took it.\n"
     "  try { writeFileSync(join(STATE_DIR, 'last-inbound'), String(Date.now())) } catch {}\n"
 )
 
 
-def _insert(path, anchor, mark, text, tag):
-    """Inserta `text` antes de `anchor`. Devuelve patched/already/no-anchor/missing."""
+def _insert(path, anchor, mark, text, tag, legacy_mark=None):
+    """Insert `text` before `anchor`. Returns patched/already/no-anchor/missing."""
     if not os.path.exists(path):
         return "missing"
     with open(path, encoding="utf-8") as f:
         src = f.read()
-    if mark in src:
+    if mark in src or (legacy_mark and legacy_mark in src):
         return "already"
     if anchor not in src:
         return "no-anchor"
@@ -90,17 +93,17 @@ def _insert(path, anchor, mark, text, tag):
 
 
 def patch(path):
-    """Parche de rich messages sobre un server.ts."""
+    """Rich-message patch on a server.ts."""
     return _insert(path, ANCHOR, MARK, PATCH, "rich")
 
 
 def patch_stamp(path):
-    """Parche de la hora del ultimo mensaje entregado sobre un server.ts."""
-    return _insert(path, STAMP_ANCHOR, STAMP_MARK, STAMP_PATCH, "stamp")
+    """Last-delivered-message timestamp patch on a server.ts."""
+    return _insert(path, STAMP_ANCHOR, STAMP_MARK, STAMP_PATCH, "stamp", LEGACY_STAMP_MARK)
 
 
 def patch_all(cache_root):
-    """Parcha todas las versiones del plugin telegram bajo un cache de plugins."""
+    """Patch every version of the telegram plugin under a plugin cache."""
     pattern = os.path.join(cache_root, "*", "telegram", "*", "server.ts")
     return [(p, "rich %s, stamp %s" % (patch(p), patch_stamp(p)))
             for p in sorted(glob.glob(pattern))]
@@ -112,9 +115,9 @@ def main(argv):
     )
     results = patch_all(cache_root)
     if not results:
-        # Primer arranque: el plugin se descarga al iniciar claude, asi que aun
-        # no hay nada que parchar. Entra en el siguiente arranque.
-        print("sin plugin en cache (%s) — parche pendiente al proximo arranque" % cache_root)
+        # First boot: the plugin is downloaded when claude starts, so there is
+        # nothing to patch yet. It applies on the next boot.
+        print("no plugin in cache (%s), patch pending until next boot" % cache_root)
         return 0
     for path, status in results:
         print("%s: %s" % (path, status))
