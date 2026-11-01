@@ -212,6 +212,45 @@ class TestRun(Base):
         self.assertFalse(cron.load()["one-shot"]["enabled"])
 
 
+class TestJobAuth(Base):
+    """The cron `claude -p` follows the same credential rule as the live session."""
+
+    def env_for(self, **creds):
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+                              "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")}
+        with mock.patch.dict(os.environ, {**clean, **creds}, clear=True):
+            return cron.job_env()
+
+    def test_oauth_only_is_kept(self):
+        env = self.env_for(CLAUDE_CODE_OAUTH_TOKEN="tok")
+        self.assertEqual(env.get("CLAUDE_CODE_OAUTH_TOKEN"), "tok")
+        self.assertEqual(cron.auth_in_use(env), "CLAUDE_CODE_OAUTH_TOKEN")
+
+    def test_key_only(self):
+        env = self.env_for(ANTHROPIC_API_KEY="key")
+        self.assertEqual(cron.auth_in_use(env), "ANTHROPIC_API_KEY")
+
+    def test_both_set_key_wins_and_token_is_dropped(self):
+        env = self.env_for(ANTHROPIC_API_KEY="key", CLAUDE_CODE_OAUTH_TOKEN="tok")
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
+        self.assertEqual(cron.auth_in_use(env), "ANTHROPIC_API_KEY")
+
+    def test_bedrock(self):
+        self.assertEqual(cron.auth_in_use(self.env_for(CLAUDE_CODE_USE_BEDROCK="1")), "CLAUDE_CODE_USE_BEDROCK")
+
+    def test_failure_names_the_credential_in_use(self):
+        self.add_daily()
+        sent = []
+        runner = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="401")  # noqa: E731
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "tok"}):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            cron.run("purchase-order", at("2026-09-14 09:00"), runner,
+                     lambda chat, text: sent.append(text) or (True, "ok"))
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", sent[0])
+        self.assertNotIn("tok)", sent[0])
+
+
 class TestWiring(unittest.TestCase):
     ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

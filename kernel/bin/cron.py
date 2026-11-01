@@ -576,9 +576,28 @@ def run(task_id: str, now: datetime | None = None, runner=subprocess.run, sender
             _lock_path().unlink(missing_ok=True)
 
 
+def auth_in_use(env: dict | None = None) -> str:
+    """Name (never value) of the credential the job uses; same precedence as entrypoint.sh."""
+    env = os.environ if env is None else env
+    for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        if env.get(name):
+            return name
+    for name in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"):
+        if env.get(name) == "1":
+            return name
+    return "none"
+
+
+def job_env() -> dict:
+    """Environment for the job: when an API key is present it wins, as in the live session."""
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(prepare_job_config()), KERNEL_CRON_JOB="1")
+    if env.get("ANTHROPIC_API_KEY"):
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    return env
+
+
 def _execute(task: dict, now: datetime, runner) -> tuple[str, str, str]:
-    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(prepare_job_config()),
-               KERNEL_CRON_JOB="1")
+    env = job_env()
     cmd = ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text",
            build_prompt(task, now)]
     workspace = os.environ.get("AGENT_WORKSPACE", "/data/workspace")
@@ -591,7 +610,8 @@ def _execute(task: dict, now: datetime, runner) -> tuple[str, str, str]:
         return ("claude is not in the image", "", "")
     output = (r.stdout or "").strip()
     if r.returncode != 0:
-        return (f"failed with exit code {r.returncode}", output, (r.stderr or "")[-2000:])
+        return (f"failed with exit code {r.returncode}; check that {auth_in_use(env)} is valid",
+                output, (r.stderr or "")[-2000:])
     if not output:
         return ("finished without an answer", "", (r.stderr or "")[-2000:])
     return ("ok", output, "")

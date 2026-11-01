@@ -20,13 +20,24 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 mkdir -p "$WS" "$CFG/channels/telegram"
 
-# 2. Auth: the client's own API key (or Bedrock/Vertex). Subscription OAuth is refused.
-if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-  log "REFUSED CLAUDE_CODE_OAUTH_TOKEN: use ANTHROPIC_API_KEY, Bedrock or Vertex"; exit 1
+# 2. Auth: the person's own credential, set in their own environment. Never logged or copied.
+#    Accepted: ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or Bedrock/Vertex.
+#    Both key and token set: the key wins everywhere. `claude -p` (cron) always prefers the key, the
+#    interactive session only once the key is approved, so the token is dropped from the environment
+#    and the key is pre-approved; otherwise chat and cron could bill different accounts.
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  AUTH_VIA=ANTHROPIC_API_KEY
+  if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    log "WARN both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set: using ANTHROPIC_API_KEY for chat and cron; CLAUDE_CODE_OAUTH_TOKEN is ignored"
+    unset CLAUDE_CODE_OAUTH_TOKEN
+  fi
+elif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then AUTH_VIA=CLAUDE_CODE_OAUTH_TOKEN
+elif [ "${CLAUDE_CODE_USE_BEDROCK:-}" = 1 ]; then AUTH_VIA=CLAUDE_CODE_USE_BEDROCK
+elif [ "${CLAUDE_CODE_USE_VERTEX:-}" = 1 ]; then AUTH_VIA=CLAUDE_CODE_USE_VERTEX
+else
+  log "MISSING credential: set one of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_USE_BEDROCK=1 or CLAUDE_CODE_USE_VERTEX=1"; exit 1
 fi
-if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ "${CLAUDE_CODE_USE_BEDROCK:-}" != 1 ] && [ "${CLAUDE_CODE_USE_VERTEX:-}" != 1 ]; then
-  log "MISSING ANTHROPIC_API_KEY (or CLAUDE_CODE_USE_BEDROCK=1 / CLAUDE_CODE_USE_VERTEX=1)"; exit 1
-fi
+export AUTH_VIA; log "auth: $AUTH_VIA"   # the variable name only, never its value
 for v in TELEGRAM_BOT_TOKEN OWNER_TELEGRAM_ID; do
   [ -n "${!v:-}" ] || { log "MISSING $v"; exit 1; }   # presence only; values never printed
 done
@@ -53,9 +64,14 @@ if [ -n "${PIXAN_ADVISOR_MODEL:-}" ]; then
   log "advisor: $PIXAN_ADVISOR_MODEL (experimental, may use more tokens)"
 fi
 umask 077
-key="${ANTHROPIC_API_KEY:-}"
-[ -f "$CFG/.claude.json" ] || printf '{"hasCompletedOnboarding":true,"customApiKeyResponses":{"approved":["%s"]},"projects":{"%s":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}\n' \
-  "${key: -20}" "$WS" > "$CFG/.claude.json"
+[ -f "$CFG/.claude.json" ] || printf '{"hasCompletedOnboarding":true,"projects":{"%s":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}\n' \
+  "$WS" > "$CFG/.claude.json"
+# Pre-approve the API key (last 20 chars only, as Claude Code records it) only when one exists.
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  jq --arg k "${ANTHROPIC_API_KEY: -20}" \
+    '.customApiKeyResponses.approved = (((.customApiKeyResponses.approved // []) - [$k]) + [$k])' \
+    "$CFG/.claude.json" > "$CFG/.claude.json.tmp" && mv -f "$CFG/.claude.json.tmp" "$CFG/.claude.json"
+fi
 
 # 5. Telegram: bot token, and who may talk to the bot (owner only, first boot only).
 printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN" > "$CFG/channels/telegram/.env"
@@ -70,9 +86,9 @@ start() {
   t new-session -d -s "$NAME" claude "$@" --dangerously-skip-permissions --channels plugin:telegram@claude-plugins-official
   sleep "${BOOT_WAIT_SEC:-10}"; t has-session -t "$NAME" 2>/dev/null
 }
-start --continue || start || { log "ERROR: claude did not start"; exit 1; }
+start --continue || start || { log "ERROR: claude did not start (auth: $AUTH_VIA)"; exit 1; }
 if t capture-pane -t "$NAME" -p | grep -Eq 'Do you want|Press Enter|/login|\(Y/n\)'; then
-  log "ERROR: claude is stuck waiting for input on screen"; exit 1
+  log "ERROR: claude is stuck waiting for input on screen (login prompt? check that $AUTH_VIA is valid)"; exit 1
 fi
 
 # 7. Heartbeat: a dead pane exits 1 (zombie != alive) so the platform restarts us.

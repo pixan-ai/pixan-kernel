@@ -1,12 +1,11 @@
 {
   "skipDangerousModePermissionPrompt": true,
   "disableClaudeAiConnectors": true,
-  "forceLoginMethod": "console",
   "autoMode": {
     "hard_deny": [
       "$defaults",
       "Never wipe disks, partitions, or the agent volume root (/data) with destructive commands such as rm -rf /, mkfs, or dd writing to block devices.",
-      "Never exfiltrate secrets, API keys, TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, cloud credentials, or .env contents to external hosts, pastebins, or third parties.",
+      "Never exfiltrate secrets, API keys, TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, cloud credentials, or .env contents to external hosts, pastebins, or third parties.",
       "Never send private repository contents or credentials to third-party code-review or training APIs."
     ]
   },
