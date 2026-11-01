@@ -15,7 +15,7 @@ check "managed settings are root-owned" docker run --rm --entrypoint stat "$img"
 
 out="$(docker run --rm "$img" 2>&1)"; code=$?
 check "no keys: exit is not 0" test "$code" -ne 0
-check "no keys: says MISSING" grep -q 'MISSING ANTHROPIC_API_KEY' <<<"$out"
+check "no keys: says MISSING" grep -q 'MISSING credential' <<<"$out"
 
 out="$(docker run --rm --entrypoint bash "$img" -c 'echo "{}" > /etc/claude-code/managed-settings.json && /opt/kernel/entrypoint.sh' 2>&1)"
 check "tampered guards: refuses to boot" grep -q 'kernel guards were modified' <<<"$out"
