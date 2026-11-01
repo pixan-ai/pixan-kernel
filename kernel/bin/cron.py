@@ -33,12 +33,13 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+TZ_NAME = os.environ.get("TZ") or "America/Mexico_City"
 try:
     from zoneinfo import ZoneInfo
-    TZ = ZoneInfo(os.environ.get("TZ") or "America/Mexico_City")
+    TZ = ZoneInfo(TZ_NAME)
 except Exception:  # no tz database on this host (the image ships tzdata)
-    # Mexico City has had no DST since 2022, so a fixed UTC-6 is the same clock.
-    TZ = timezone(timedelta(hours=-6), "America/Mexico_City")
+    TZ_NAME = "UTC"
+    TZ = timezone.utc
 QUIET = "NO_UPDATE"               # the job has nothing to report: deliver nothing
 STOP = "END_TASK"              # the job decided it is done: disable the task
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
@@ -147,7 +148,7 @@ def _field(spec: str, lo: int, hi: int) -> set[int]:
 
 
 def parse_schedule(expr: str) -> dict:
-    """Standard 5-field cron (minute hour day-of-month month day-of-week), Mexico City time."""
+    """Standard 5-field cron (minute hour day-of-month month day-of-week), local time (TZ)."""
     parts = (expr or "").split()
     if len(parts) != 5:
         raise ValueError("expected 5 fields: minute hour day-of-month month day-of-week")
@@ -220,7 +221,7 @@ def _parse_at(raw: str) -> datetime:
     try:
         return datetime.strptime(raw.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
     except ValueError:
-        raise ValueError(f"--at expects 'YYYY-MM-DD HH:MM' in Mexico City time, not {raw!r}") from None
+        raise ValueError(f"--at expects 'YYYY-MM-DD HH:MM' in local time (TZ), not {raw!r}") from None
 
 
 def _floor_minute(ts: float) -> float:
@@ -414,7 +415,7 @@ def build_prompt(task: dict, now: datetime) -> str:
     lines = [
         f"[SCHEDULED TASK {task['id']}]",
         "You are running alone, outside your live conversation: nobody is waiting for you and you cannot ask questions.",
-        f"Time: {now.strftime('%Y-%m-%d %H:%M')} (America/Mexico_City). "
+        f"Time: {now.strftime('%Y-%m-%d %H:%M')} ({TZ_NAME}). "
         f"Requested by {task['created_by']} for chat {task['chat_id']}. Run number {task.get('runs', 0) + 1}.",
         "",
         "Instruction:",
@@ -576,22 +577,36 @@ def run(task_id: str, now: datetime | None = None, runner=subprocess.run, sender
             _lock_path().unlink(missing_ok=True)
 
 
+def _has_api_key_helper(env) -> bool:
+    for f in ("/etc/claude-code/managed-settings.json",
+              os.path.join(env.get("CLAUDE_CONFIG_DIR", "/data/config"), "settings.json")):
+        try:
+            if json.load(open(f, encoding="utf-8")).get("apiKeyHelper"):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def auth_in_use(env: dict | None = None) -> str:
-    """Name (never value) of the credential the job uses; same precedence as entrypoint.sh."""
+    """Name (never value) of the credential Claude uses, in Claude's own precedence
+    (same order as entrypoint.sh): cloud, AUTH_TOKEN, API_KEY, apiKeyHelper, OAuth."""
     env = os.environ if env is None else env
-    for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+    for name in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+        if env.get(name) and env.get(name) not in ("0", "false"):
+            return name
+    for name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
         if env.get(name):
             return name
-    for name in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"):
-        if env.get(name) == "1":
-            return name
-    return "none"
+    if _has_api_key_helper(env):
+        return "apiKeyHelper"
+    return "CLAUDE_CODE_OAUTH_TOKEN" if env.get("CLAUDE_CODE_OAUTH_TOKEN") else "none"
 
 
 def job_env() -> dict:
-    """Environment for the job: when an API key is present it wins, as in the live session."""
+    """Environment for the job: the OAuth token is dropped when anything ranks above it."""
     env = dict(os.environ, CLAUDE_CONFIG_DIR=str(prepare_job_config()), KERNEL_CRON_JOB="1")
-    if env.get("ANTHROPIC_API_KEY"):
+    if auth_in_use(env) not in ("CLAUDE_CODE_OAUTH_TOKEN", "none"):
         env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
     return env
 
@@ -610,7 +625,7 @@ def _execute(task: dict, now: datetime, runner) -> tuple[str, str, str]:
         return ("claude is not in the image", "", "")
     output = (r.stdout or "").strip()
     if r.returncode != 0:
-        return (f"failed with exit code {r.returncode}; check that {auth_in_use(env)} is valid",
+        return (f"failed with exit code {r.returncode}; if this persists, check that {auth_in_use(env)} is valid",
                 output, (r.stderr or "")[-2000:])
     if not output:
         return ("finished without an answer", "", (r.stderr or "")[-2000:])
@@ -624,8 +639,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("add")
     a.add_argument("--id", required=True)
-    a.add_argument("--schedule", default="", help='5-field cron in Mexico City time, e.g. "0 9 * * 1-5"')
-    a.add_argument("--at", default="", help='once: "YYYY-MM-DD HH:MM" in Mexico City time')
+    a.add_argument("--schedule", default="", help='5-field cron in local time (TZ), e.g. "0 9 * * 1-5"')
+    a.add_argument("--at", default="", help='once: "YYYY-MM-DD HH:MM" in local time (TZ)')
     a.add_argument("--until", default="", help="last day it runs (YYYY-MM-DD)")
     a.add_argument("--chat-id", required=True)
     a.add_argument("--created-by", required=True)

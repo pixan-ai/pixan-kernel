@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Records Telegram alerts instead of sending them (L1 only).
+{ printf '%s\n' "$*"; cat; echo ---; } >> "${CURL_LOG:-/dev/null}"

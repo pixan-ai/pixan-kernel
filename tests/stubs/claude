@@ -1,9 +1,22 @@
-#!/bin/sh
-# Stand-in for Claude Code in tests. STUB_CLAUDE=exit dies at once, =prompt shows a
-# blocking question, anything else stays alive until killed.
+#!/usr/bin/env bash
+# Stand-in for Claude Code in tests. `claude plugin ...` fakes the Telegram plugin install.
+# STUB_CLAUDE: exit = dies at once; prompt = theme picker; hung = frozen mid-activity;
+# noserver = no Telegram server; dropped = channel drops messages; authdead = credential rejected;
+# anything else = alive with a fake `bun server.ts`, until killed.
+if [ "${1:-}" = plugin ]; then
+  echo "stub-claude $*"
+  [ "${2:-}" = install ] && mkdir -p "$CLAUDE_CONFIG_DIR/plugins/cache/claude-plugins-official/telegram/0.0.1" \
+    && touch "$CLAUDE_CONFIG_DIR/plugins/cache/claude-plugins-official/telegram/0.0.1/server.ts"
+  exit 0
+fi
 echo "stub-claude $*"
+trap 'kill 0' TERM
 case "${STUB_CLAUDE:-alive}" in
   exit) exit 0 ;;
-  prompt) echo "Do you want to continue? (Y/n)" ;;
+  prompt) printf 'Choose the text style that looks best with your terminal\n> Dark mode\nEnter to confirm\n' ;;
+  hung) echo "✻ Thinking… (esc to interrupt)" ;;
+  dropped) echo "Inbound messages will be silently dropped" ;;
+  authdead) echo "API Error: 401 Invalid API key · Please run /login" ;;
 esac
-exec sleep 3600
+[ "${STUB_CLAUDE:-alive}" = noserver ] || bash -c 'exec -a "bun server.ts" sleep 3600' &
+sleep 3600 & wait
