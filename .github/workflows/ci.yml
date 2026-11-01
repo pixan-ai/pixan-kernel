@@ -25,6 +25,10 @@ jobs:
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
           sudo install -m 0755 /tmp/hadolint /tmp/gitleaks /usr/local/bin/
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11" # the image's python (Debian bookworm)
+      - run: python -m pip install -q pyyaml==6.0.3
       - run: ./tests/l0-static.sh
 
   l1:
@@ -34,6 +38,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11" # the image's python (Debian bookworm)
       - run: sudo apt-get install -y -qq tmux jq
       - run: ./tests/l1-unit.sh
 

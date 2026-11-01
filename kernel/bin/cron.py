@@ -54,9 +54,18 @@ CONTEXT_HOURS = 24                    # older than this is no longer news
 CLIP = 400                            # characters per delivery
 
 
-def _env_int(name: str, default: int) -> int:
-    """CRON_GRACE_MIN (late slots still run), CRON_MIN_GAP_MIN, CRON_MAX_TASKS, CRON_TIMEOUT_SEC."""
-    return int(os.environ.get(name) or default)
+# One named default per setting. CRON_GRACE_MIN: late slots still run within it.
+DEFAULTS = {"CRON_GRACE_MIN": 120, "CRON_MIN_GAP_MIN": 15, "CRON_MAX_TASKS": 20, "CRON_TIMEOUT_SEC": 900}
+
+
+def _env_int(name: str) -> int:
+    """A bad value never stops `tick`: it falls back to the default with a WARN."""
+    raw = os.environ.get(name, "").strip()
+    try:
+        return int(raw) if raw else DEFAULTS[name]
+    except ValueError:
+        print(f"WARN {name}={raw!r} is not a number; using {DEFAULTS[name]}", file=sys.stderr)
+        return DEFAULTS[name]
 
 
 # ------------------------------------------------------------------ paths
@@ -182,7 +191,7 @@ def validate_schedule(expr: str, now: datetime) -> dict:
     first = next_run(p, now)
     if first is None:
         raise ValueError(f"schedule {expr!r} does not occur in the next year")
-    gap = _env_int("CRON_MIN_GAP_MIN", 15)
+    gap = _env_int("CRON_MIN_GAP_MIN")
     prev, t = first, first
     for _ in range(200):  # enough to see the tightest spacing of any real schedule
         t = next_run(p, t, horizon_days=8)
@@ -207,10 +216,10 @@ def last_slot(task: dict, now: datetime) -> datetime | None:
     """Most recent scheduled minute within the grace window, or None."""
     if task.get("at"):
         at = _parse_at(task["at"])
-        return at if timedelta(0) <= now - at <= timedelta(minutes=_env_int("CRON_GRACE_MIN", 120)) else None
+        return at if timedelta(0) <= now - at <= timedelta(minutes=_env_int("CRON_GRACE_MIN")) else None
     p = parse_schedule(task["schedule"])
     t = now.replace(second=0, microsecond=0)
-    for _ in range(_env_int("CRON_GRACE_MIN", 120) + 1):
+    for _ in range(_env_int("CRON_GRACE_MIN") + 1):
         if matches(p, t):
             return t
         t -= timedelta(minutes=1)
@@ -228,7 +237,7 @@ def expire(tasks: dict, now: datetime) -> list[str]:
             task.update(enabled=False, last_status="expired")
             closed.append(task["id"])
         elif task.get("at") and not task.get("last_slot"):
-            if now - _parse_at(task["at"]) > timedelta(minutes=_env_int("CRON_GRACE_MIN", 120)):
+            if now - _parse_at(task["at"]) > timedelta(minutes=_env_int("CRON_GRACE_MIN")):
                 task.update(enabled=False, last_status="missed (the container was down)")
                 closed.append(task["id"])
     return closed
@@ -307,8 +316,9 @@ def add(task_id: str, chat_id: str, created_by: str, prompt: str, schedule: str 
     if task_id in tasks:
         raise ValueError(f"task {task_id!r} already exists: remove it or use another id")
     active = sum(1 for t in tasks.values() if t.get("enabled", True))
-    if active >= _env_int("CRON_MAX_TASKS", 20):
-        raise ValueError(f"there are already {active} active tasks; the max is {_env_int("CRON_MAX_TASKS", 20)}")
+    max_tasks = _env_int("CRON_MAX_TASKS")
+    if active >= max_tasks:
+        raise ValueError(f"there are already {active} active tasks; the max is {max_tasks}")
 
     task = {"id": task_id, "chat_id": str(chat_id).strip(), "created_by": created_by.strip(),
             "prompt": prompt, "enabled": True, "created_at": now.timestamp(), "runs": 0,
@@ -551,11 +561,12 @@ def _execute(task: dict, now: datetime, runner) -> tuple[str, str, str]:
     cmd = ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text",
            build_prompt(task, now)]
     workspace = os.environ.get("AGENT_WORKSPACE", "/data/workspace")
+    timeout = _env_int("CRON_TIMEOUT_SEC")
     try:
         r = runner(cmd, cwd=workspace if os.path.isdir(workspace) else None, env=env,
-                   capture_output=True, text=True, timeout=_env_int("CRON_TIMEOUT_SEC", 900))
+                   capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return ("timed out", "", f"timeout {_env_int("CRON_TIMEOUT_SEC", 900)} s")
+        return ("timed out", "", f"timeout {timeout} s")
     except FileNotFoundError:
         return ("claude is not in the image", "", "")
     output = (r.stdout or "").strip()

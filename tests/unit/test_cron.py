@@ -133,6 +133,21 @@ class TestDue(Base):
         self.assertEqual(cron.due(cron.load(), at("2026-09-14 09:00")), [])
 
 
+class TestSettings(Base):
+    def test_bad_number_falls_back_to_default_and_tick_still_runs(self):
+        self.add_daily()
+        launched = []
+        bad = {k: "abc" for k in cron.DEFAULTS}
+        with mock.patch.dict(os.environ, bad), mock.patch("sys.stderr") as err:
+            self.assertEqual(cron._env_int("CRON_GRACE_MIN"), cron.DEFAULTS["CRON_GRACE_MIN"])
+            cron.tick(at("2026-09-14 09:00"), lambda tid: launched.append(tid) or 1)
+        self.assertEqual(launched, ["purchase-order"])
+        self.assertIn("WARN CRON_GRACE_MIN='abc' is not a number", "".join(c.args[0] for c in err.write.call_args_list))
+
+    def test_every_setting_has_one_named_default(self):
+        self.assertEqual(set(cron.DEFAULTS), {"CRON_GRACE_MIN", "CRON_MIN_GAP_MIN", "CRON_MAX_TASKS", "CRON_TIMEOUT_SEC"})
+
+
 class TestRun(Base):
     def fake_claude(self, stdout="", code=0, exc=None):
         calls = []

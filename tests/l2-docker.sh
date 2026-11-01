@@ -11,6 +11,8 @@ trap 'docker rm -f "$c" "$c-t" >/dev/null 2>&1' EXIT
 check "base image builds" docker build -q -t "$base" .
 check "base image has no claude" docker run --rm --entrypoint bash "$base" -c '! command -v claude'
 check "test client image builds" docker build -q -t "$img" --build-arg BASE="$base" -f tests/stubs/Dockerfile tests/stubs
+check "kernel python compiles on the image's python3" docker run --rm --entrypoint bash "$base" -c 'python3 -m py_compile /opt/kernel/bin/*.py'
+check "cron.py list runs on the image" docker run --rm --entrypoint python3 -e CLAUDE_CONFIG_DIR=/tmp "$base" /opt/kernel/bin/cron.py list
 check "managed settings are root-owned" test "$(docker run --rm --entrypoint stat "$img" -c %U:%a /etc/claude-code/managed-settings.json)" = root:644
 
 out="$(docker run --rm "$img" 2>&1)"; code=$?
