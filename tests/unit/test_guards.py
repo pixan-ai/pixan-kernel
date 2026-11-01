@@ -103,7 +103,7 @@ class TestClockHook(unittest.TestCase):
         data = json.loads(proc.stdout)
         ctx = data["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
-        self.assertIn("America/Mexico_City", ctx)
+        self.assertIn(os.environ.get("TZ") or "America/Mexico_City", ctx)
         self.assertIn("Do not use UTC timestamps", ctx)
         self.assertTrue("CST" in ctx or "CDT" in ctx)
 

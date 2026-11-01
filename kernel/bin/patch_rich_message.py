@@ -66,8 +66,6 @@ bot.on('message', async ctx => {
 
 STAMP_ANCHOR = "  mcp.notification({\n    method: 'notifications/claude/channel',\n"
 STAMP_MARK = "// --- kernel: time of the last message delivered"
-# Mark written by earlier releases; still recognized so old volumes are not patched twice.
-LEGACY_STAMP_MARK = "// --- pixan: hora del ultimo mensaje entregado"
 STAMP_PATCH = (
     "  // --- kernel: time of the last message delivered to the session. The heartbeat\n"
     "  // compares it with the transcript to tell whether a message came in and nobody took it.\n"
@@ -75,13 +73,13 @@ STAMP_PATCH = (
 )
 
 
-def _insert(path, anchor, mark, text, tag, legacy_mark=None):
+def _insert(path, anchor, mark, text, tag):
     """Insert `text` before `anchor`. Returns patched/already/no-anchor/missing."""
     if not os.path.exists(path):
         return "missing"
     with open(path, encoding="utf-8") as f:
         src = f.read()
-    if mark in src or (legacy_mark and legacy_mark in src):
+    if mark in src:
         return "already"
     if anchor not in src:
         return "no-anchor"
@@ -99,7 +97,7 @@ def patch(path):
 
 def patch_stamp(path):
     """Last-delivered-message timestamp patch on a server.ts."""
-    return _insert(path, STAMP_ANCHOR, STAMP_MARK, STAMP_PATCH, "stamp", LEGACY_STAMP_MARK)
+    return _insert(path, STAMP_ANCHOR, STAMP_MARK, STAMP_PATCH, "stamp")
 
 
 def patch_all(cache_root):

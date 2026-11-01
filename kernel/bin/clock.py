@@ -13,13 +13,16 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 
+TZ_NAME = os.environ.get("TZ") or "America/Mexico_City"
+
+
 def _now_local() -> str:
     try:
-        now = datetime.now(ZoneInfo(os.environ.get("TZ") or "America/Mexico_City"))
-        return now.strftime("%Y-%m-%d %H:%M:%S %Z")
+        now = datetime.now(ZoneInfo(TZ_NAME))
+        return now.strftime("%Y-%m-%d %H:%M:%S %Z") + f" ({TZ_NAME})"
     except Exception:
         now = datetime.now(timezone.utc)
-        return now.strftime("%Y-%m-%d %H:%M:%S UTC") + " (fallback; prefer America/Mexico_City)"
+        return now.strftime("%Y-%m-%d %H:%M:%S UTC") + f" (fallback: TZ {TZ_NAME!r} not found)"
 
 
 def main() -> int:
@@ -34,7 +37,7 @@ def main() -> int:
         event = "UserPromptSubmit"
     stamp = _now_local()
     ctx = (
-        f"Real system time: {stamp} (America/Mexico_City). "
+        f"Real system time: {stamp}. "
         "This is the authoritative time. Do not use UTC timestamps from the "
         "Telegram channel and do not make up the time."
     )
