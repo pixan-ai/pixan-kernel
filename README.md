@@ -92,7 +92,7 @@ See [`deploy/windows/README.md`](deploy/windows/README.md). In short:
 | Variable | Required | Meaning |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | one of* | The person's own Console API key (recommended). |
-| `CLAUDE_CODE_OAUTH_TOKEN` | one of* | The owner's own subscription token, for their own individual use. *Or `CLAUDE_CODE_USE_BEDROCK=1` / `CLAUDE_CODE_USE_VERTEX=1` with their env. See Auth model. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | one of* | The owner's own subscription token, for their own individual use. *Or `ANTHROPIC_AUTH_TOKEN`, an `apiKeyHelper`, or `CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY=1` with their env. See Auth model. |
 | `TELEGRAM_BOT_TOKEN`, `OWNER_TELEGRAM_ID` | yes | Bot token and the owner's numeric Telegram ID. |
 | `AGENT_NAME`, `AGENT_LANGUAGE` | no | Defaults `agent`, `English`. |
 | `TZ` | no | Default `America/Mexico_City`. |
@@ -107,25 +107,31 @@ and is billed by Anthropic (or their cloud provider) directly. The project never
 for anyone's credential. The kernel never logs, copies or sends credentials; it logs only the *name* of the
 variable in use (`auth: ANTHROPIC_API_KEY`).
 
-The agent boots with at least one of:
+The agent boots with at least one of these. When several are set, the kernel resolves them in Claude Code's
+own precedence, so the logged name is the one actually used: cloud (`CLAUDE_CODE_USE_BEDROCK` /
+`_VERTEX` / `_FOUNDRY`) > `ANTHROPIC_AUTH_TOKEN` > `ANTHROPIC_API_KEY` > `apiKeyHelper` (managed settings) >
+`CLAUDE_CODE_OAUTH_TOKEN`.
 
 | Credential | Notes |
 |---|---|
 | `ANTHROPIC_API_KEY` | **Recommended** for agents that serve other people or Telegram groups. Console key, usage-billed. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | A Claude subscription token (`claude setup-token`). Meant for the owner's own ordinary individual use; its limits assume that use and Anthropic may enforce its terms. We make no promise that a subscription may be used for an always-on agent or for groups. Team/Enterprise subscriptions: an Owner must enable channels for the organization. |
-| `CLAUDE_CODE_USE_BEDROCK=1` / `CLAUDE_CODE_USE_VERTEX=1` | Your own cloud account and its env. The agent runs **without Telegram channels** there. |
+| `ANTHROPIC_AUTH_TOKEN` / `apiKeyHelper` | Bearer token or key helper (e.g. a company gateway). |
+| `CLAUDE_CODE_USE_BEDROCK=1` / `_VERTEX=1` / `_FOUNDRY=1` | Your own cloud account and its env. The agent runs **without Telegram channels** there (boot logs a `WARN`). |
 
 If none is set, the boot logs `MISSING credential` with every option and exits 1.
 
-**Both key and token set:** the API key wins and the log shows a `WARN`. `claude -p` (scheduled tasks)
+**OAuth token plus anything ranked above it:** the higher one wins and the log shows a `WARN`. `claude -p` (scheduled tasks)
 always uses the key when present, while the interactive session uses it only once it is approved; without
 one rule, chat and cron could bill different accounts. So the kernel drops the token from the environment of
-both and pre-approves the key in `/data/config/.claude.json` by its last 20 characters only (how Claude Code
+both (L1 asserts the Claude pane has no token) and pre-approves the key in `/data/config/.claude.json` by its last 20 characters only (how Claude Code
 records approved keys); the full key stays in the environment. With a token only, nothing is written to
 `customApiKeyResponses`, and the token is never copied to the volume.
 
-If Claude fails to start, gets stuck on a login prompt, or a scheduled run fails, the alert names the
-credential in use so you know which one to check. A one-time real-credential lab test is in
+If Claude fails to start, gets stuck on a setup screen, or a scheduled run fails, the message names the
+credential in use so you know which one to check. If the screen shows the credential is rejected
+(`Invalid API key`, `OAuth access token is invalid`, ...), the owner gets **one** Telegram alert naming it and the
+agent is not restarted (a restart cannot fix a credential). A one-time real-credential lab test is in
 [docs/lab-auth-checklist.md](docs/lab-auth-checklist.md) (not run in CI).
 
 ## Security model
@@ -167,8 +173,8 @@ model id) and the kernel writes `advisorModel` into the user settings at boot (t
 | Level | Runs | Proves |
 |---|---|---|
 | L0 `tests/l0-static.sh` | shellcheck, hadolint, JSON/YAML/TOML, Python unit tests, gitleaks | files are sane; cron, guards, rich messages behave; base image has no Claude Code; advisor off when unset |
-| L1 `tests/l1-unit.sh` | entrypoint with a stub `claude` | missing keys fail fast, OAuth refused, seeding rules, heartbeat, zombie → exit 1 |
-| L2 `tests/l2-docker.sh` | real image + stub client layer, `--network none` | image builds, root-owned guards, tampered guard refuses boot, heartbeat on `/data`, killed Claude → container exits 1 |
+| L1 `tests/l1-unit.sh` | entrypoint with a stub `claude` | auth precedence (OAuth, key, both, AUTH_TOKEN, Foundry), missing credential fails fast, no token in the pane env, boot order, seeding rules, setup-screen detection; heartbeat: zombie, hung Claude, no `bun server.ts`, dropped channel → exit 1; dead credential → one owner alert, no restart |
+| L2 `tests/l2-docker.sh` | real image + stub client layer, `--network none` | image builds, guards are `root:644`, tampered guard refuses boot, heartbeat on `/data`, killed Claude → container exits 1 |
 
 CI runs all three on every PR; pushes to `main` also publish `ghcr.io/pixan-ai/pixan-kernel`.
 
@@ -176,7 +182,7 @@ CI runs all three on every PR; pushes to `main` also publish `ghcr.io/pixan-ai/p
 
 - **Batch 2**: the 9 optional plugins; ElevenLabs voice (shipped without a token); Slack (off by default);
   autoupdate with automatic rollback to the Beta canary's last-known-good image digest; scheduled,
-  encrypted volume backups; English translation of the remaining Spanish strings in ported scripts.
+  encrypted volume backups.
 - Later: Teams channel, wake-on-message.
 
 ## License
