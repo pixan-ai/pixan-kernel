@@ -16,6 +16,10 @@ done
 check "CLAUDE.md imports @SOUL.md"     grep -qx '@SOUL.md' kernel/seed/workspace/CLAUDE.md
 check "CLAUDE.md imports @IDENTITY.md" grep -qx '@IDENTITY.md' kernel/seed/workspace/CLAUDE.md
 check "base image has no Claude Code" absent 'claude.ai/install.sh\|@anthropic-ai/claude-code' "$(cat Dockerfile)"
+check "channels enabled in managed settings" jq -e '.channelsEnabled == true' kernel/managed-settings.json
+check "managed hooks use /usr/bin/python3" jq -e '[.. | objects | select(.type? == "command") | .command] | all(. == "/usr/bin/python3")' kernel/managed-settings.json
+check "no Write(...) deny rules (they never match)" absent '"Write(' "$(cat kernel/managed-settings.json)"
+check "Telegram access is allowlist-only" jq -e '.dmPolicy == "allowlist"' kernel/seed/access.json
 check "plugins are not in managed settings" absent 'enabledPlugins' "$(cat kernel/managed-settings.json)"
 check "advisor is off in the seed" absent 'advisorModel' "$(cat kernel/seed/settings.json kernel/managed-settings.json)"
 # shellcheck disable=SC2016

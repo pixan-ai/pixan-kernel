@@ -3,10 +3,14 @@
 # Follows the pattern of Anthropic's reference devcontainer init-firewall.sh:
 # default DROP, allow DNS + loopback + established, allow only resolved allowlisted IPs.
 # Extra domains: KERNEL_EGRESS_ALLOW="kepler.internal example.com" (space separated).
+# Extra CIDRs: KERNEL_EGRESS_ALLOW_CIDR="10.0.0.0/8 192.168.1.0/24" (space separated).
 set -euo pipefail
 IFS=$'\n\t'
-domains=(api.anthropic.com statsig.anthropic.com sentry.io api.telegram.org)
-read -r -a extra <<<"${KERNEL_EGRESS_ALLOW:-}" || true
+# registry.npmjs.org: `bun install` of the Telegram plugin's dependencies.
+domains=(api.anthropic.com statsig.anthropic.com sentry.io api.telegram.org registry.npmjs.org)
+# The lists are space separated: split them on spaces explicitly (IFS above has no space).
+IFS=' ' read -r -a extra <<<"${KERNEL_EGRESS_ALLOW:-}" || true
+IFS=' ' read -r -a cidrs <<<"${KERNEL_EGRESS_ALLOW_CIDR:-}" || true
 domains+=("${extra[@]}")
 
 iptables -F; iptables -X
@@ -26,7 +30,7 @@ for d in "${domains[@]}"; do
 done
 
 # Private networks stay reachable only if the operator asks (e.g. an on-prem ERP).
-for cidr in ${KERNEL_EGRESS_ALLOW_CIDR:-}; do ipset add allowed-domains "$cidr" -exist; done
+for cidr in "${cidrs[@]}"; do ipset add allowed-domains "$cidr" -exist; done
 
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A INPUT  -p udp --sport 53 -j ACCEPT
@@ -37,6 +41,14 @@ iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 iptables -P INPUT DROP; iptables -P FORWARD DROP; iptables -P OUTPUT DROP
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
+# IPv6: the allowlist is IPv4 only, so everything but loopback is dropped.
+if ip6tables -L -n >/dev/null 2>&1; then
+  ip6tables -F; ip6tables -X
+  ip6tables -A INPUT -i lo -j ACCEPT; ip6tables -A OUTPUT -o lo -j ACCEPT
+  ip6tables -P INPUT DROP; ip6tables -P FORWARD DROP; ip6tables -P OUTPUT DROP
+else
+  echo "firewall: ip6tables unavailable (no IPv6 in this kernel); nothing to drop" >&2
+fi
 
 # Self-test, like the reference: a blocked host must fail, Anthropic must pass.
 if curl -fsS --max-time 5 https://example.com >/dev/null 2>&1; then

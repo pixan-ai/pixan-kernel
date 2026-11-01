@@ -1,6 +1,7 @@
 {
   "skipDangerousModePermissionPrompt": true,
   "disableClaudeAiConnectors": true,
+  "channelsEnabled": true,
   "autoMode": {
     "hard_deny": [
       "$defaults",
@@ -19,9 +20,7 @@
       "Read(**/.env.*)",
       "Read(/data/config/.credentials.json)",
       "Edit(/etc/claude-code/**)",
-      "Write(/etc/claude-code/**)",
-      "Edit(/opt/kernel/**)",
-      "Write(/opt/kernel/**)"
+      "Edit(/opt/kernel/**)"
     ]
   },
   "hooks": {
@@ -30,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3",
+            "command": "/usr/bin/python3",
             "args": [
               "/opt/kernel/bin/clock.py"
             ],
@@ -44,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3",
+            "command": "/usr/bin/python3",
             "args": [
               "/opt/kernel/bin/clock.py"
             ],
@@ -52,7 +51,7 @@
           },
           {
             "type": "command",
-            "command": "python3",
+            "command": "/usr/bin/python3",
             "args": [
               "/opt/kernel/bin/cron.py",
               "context"
@@ -68,7 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3",
+            "command": "/usr/bin/python3",
             "args": [
               "/opt/kernel/bin/ssrf_guard.py"
             ],
