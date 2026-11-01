@@ -13,6 +13,10 @@ check "base image has no claude" docker run --rm --entrypoint bash "$base" -c '!
 check "test client image builds" docker build -q -t "$img" --build-arg BASE="$base" -f tests/stubs/Dockerfile tests/stubs
 check "kernel python compiles on the image's python3" docker run --rm --entrypoint bash "$base" -c 'python3 -m py_compile /opt/kernel/bin/*.py'
 check "cron.py list runs on the image" docker run --rm --entrypoint python3 -e CLAUDE_CONFIG_DIR=/tmp "$base" /opt/kernel/bin/cron.py list
+check "LANG is C.UTF-8" test "$(docker run --rm --entrypoint printenv "$base" LANG)" = C.UTF-8
+check "PATH has no agent-writable dirs" absent '/home/agent' "$(docker run --rm --entrypoint printenv "$base" PATH)"
+# shellcheck disable=SC2016
+check "bun resolves to a root-owned link" docker run --rm --entrypoint bash "$base" -c '[ "$(command -v bun)" = /usr/local/bin/bun ] && [ "$(stat -c %U /usr/local/bin/bun)" = root ] && bun --version'
 check "managed settings are root-owned" test "$(docker run --rm --entrypoint stat "$img" -c %U:%a /etc/claude-code/managed-settings.json)" = root:644
 
 out="$(docker run --rm "$img" 2>&1)"; code=$?

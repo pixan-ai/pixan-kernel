@@ -13,7 +13,8 @@ RUN apt-get update -qq \
  && rm -rf /var/lib/apt/lists/*
 
 ENV HOME=/home/agent \
-    PATH="/home/agent/.local/bin:/home/agent/.bun/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    PATH="/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    LANG=C.UTF-8 \
     TZ=America/Mexico_City \
     DISABLE_AUTOUPDATER=1 \
     DISABLE_UPDATES=1 \
@@ -27,12 +28,14 @@ RUN useradd -m -u 1000 -s /bin/bash agent && mkdir -p /data && chown agent:agent
 # Bun is required by the official Telegram plugin. Pinned like everything else.
 ARG BUN_VERSION=bun-v1.2.23
 USER agent
-RUN curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}" && bun --version
+RUN curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}" && /home/agent/.bun/bin/bun --version
 
 # Kernel files are root-owned and read-only for the agent. The manifest lets the
 # boot check detect a client layer that overwrote a guard.
 # hadolint ignore=DL3002
 USER root
+# Agent-writable dirs stay off PATH; root-owned links in /usr/local/bin point at the pinned installs.
+RUN ln -s /home/agent/.bun/bin/bun /usr/local/bin/bun && bun --version
 COPY kernel/managed-settings.json /etc/claude-code/managed-settings.json
 COPY kernel/ /opt/kernel/
 RUN rm /opt/kernel/managed-settings.json \

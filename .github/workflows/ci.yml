@@ -53,6 +53,7 @@ jobs:
         with:
           persist-credentials: false
       - run: ./tests/l2-docker.sh
+      - run: ./tests/l2-client.sh
 
   publish:
     name: Publish base image (main only)

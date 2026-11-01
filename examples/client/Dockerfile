@@ -15,8 +15,15 @@ RUN mkdir -p /opt/client/config && chown 1000:1000 /opt/client/config
 
 # Claude Code is installed by the client, pinned, as the non-root agent user.
 # DISABLE_AUTOUPDATER=1 and DISABLE_UPDATES=1 are inherited from the kernel: updates ship as new images.
+# The installer obeys DISABLE_UPDATES too (prints "Updates are disabled", exits 0, installs nothing),
+# so it runs without it; the running agent keeps it.
 USER 1000
-RUN curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_CODE_VERSION}" && claude --version
+RUN curl -fsSL https://claude.ai/install.sh | env -u DISABLE_UPDATES bash -s "${CLAUDE_CODE_VERSION}" \
+ && /home/agent/.local/bin/claude --version
+# Root-owned link: the agent-writable ~/.local/bin is not on PATH.
+USER 0
+RUN ln -s /home/agent/.local/bin/claude /usr/local/bin/claude && claude --version
+USER 1000
 RUN export CLAUDE_CONFIG_DIR=/opt/client/config \
  && claude plugin marketplace add anthropics/claude-plugins-official \
  && claude plugin install telegram@claude-plugins-official \
