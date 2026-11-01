@@ -4,7 +4,7 @@
   cron.py add --id ID --schedule "0 9 * * 1-5" --chat-id CHAT --created-by WHO --prompt "..."
               [--until YYYY-MM-DD]
   cron.py add --id ID --at "2026-09-14 09:00" --chat-id CHAT --created-by WHO --prompt "..."
-  cron.py list [--json]
+  cron.py list
   cron.py remove|pause|resume --id ID
   cron.py context       # called by a hook: deliveries this session did not see
   cron.py tick          # called by the heartbeat: launches at most one due task
@@ -12,12 +12,10 @@
 
 Why a separate `claude -p` (a pattern proven in production): the live TUI
 session may be mid-conversation with a client, and a scheduled job must neither
-interrupt it nor freeze it. The job runs with its own CLAUDE_CONFIG_DIR whose
-settings drop the Telegram plugin, so it never competes with the live session
+interrupt it nor freeze it. The job runs with its own CLAUDE_CONFIG_DIR with
+empty user settings (no Telegram plugin; managed settings still apply), so it never competes with the live session
 for Telegram updates. The runner, not the model, delivers the final answer.
-
-Why not the old agent_cron.py (removed in lean phase 1): it only stored intent.
-Why not CronCreate: it lives inside the session and dies at every session reset (soft) or container restart (hard daily / freeze).
+Not CronCreate: it lives inside the session and dies with it.
 
 Exit 0 ok, 1 the run failed, 2 invalid input, 3 unknown task
 """
@@ -45,7 +43,6 @@ STOP = "END_TASK"              # the job decided it is done: disable the task
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
 MAX_PROMPT = 4000
 MAX_DELIVERY = 30000           # under the 32768 limit of sendRichMessage
-DROP_FROM_JOB_SETTINGS = ("enabledPlugins", "extraKnownMarketplaces", "channelsEnabled")
 # What the live session did NOT see: deliveries are sent by the runner from a
 # separate `claude -p`, so the agent that later handles the chat has no idea
 # what was sent. They are logged here and a hook feeds them back as context.
@@ -57,29 +54,9 @@ CONTEXT_HOURS = 24                    # older than this is no longer news
 CLIP = 400                            # characters per delivery
 
 
-def _int_env(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, "") or default)
-    except ValueError:
-        return default
-
-
-def grace_min() -> int:
-    """How late a missed slot may still run (container down during a deploy/reset)."""
-    return _int_env("CRON_GRACE_MIN", 120)
-
-
-def min_gap_min() -> int:
-    """Each run spends the agent's Claude subscription: no schedules tighter than this."""
-    return _int_env("CRON_MIN_GAP_MIN", 15)
-
-
-def max_tasks() -> int:
-    return _int_env("CRON_MAX_TASKS", 20)
-
-
-def timeout_sec() -> int:
-    return _int_env("CRON_TIMEOUT_SEC", 900)
+def _env_int(name: str, default: int) -> int:
+    """CRON_GRACE_MIN (late slots still run), CRON_MIN_GAP_MIN, CRON_MAX_TASKS, CRON_TIMEOUT_SEC."""
+    return int(os.environ.get(name) or default)
 
 
 # ------------------------------------------------------------------ paths
@@ -205,7 +182,7 @@ def validate_schedule(expr: str, now: datetime) -> dict:
     first = next_run(p, now)
     if first is None:
         raise ValueError(f"schedule {expr!r} does not occur in the next year")
-    gap = min_gap_min()
+    gap = _env_int("CRON_MIN_GAP_MIN", 15)
     prev, t = first, first
     for _ in range(200):  # enough to see the tightest spacing of any real schedule
         t = next_run(p, t, horizon_days=8)
@@ -224,20 +201,16 @@ def _parse_at(raw: str) -> datetime:
         raise ValueError(f"--at expects 'YYYY-MM-DD HH:MM' in local time (TZ), not {raw!r}") from None
 
 
-def _floor_minute(ts: float) -> float:
-    return ts - (ts % 60)
-
-
 # ------------------------------------------------------------------ what is due
 
 def last_slot(task: dict, now: datetime) -> datetime | None:
     """Most recent scheduled minute within the grace window, or None."""
     if task.get("at"):
         at = _parse_at(task["at"])
-        return at if timedelta(0) <= now - at <= timedelta(minutes=grace_min()) else None
+        return at if timedelta(0) <= now - at <= timedelta(minutes=_env_int("CRON_GRACE_MIN", 120)) else None
     p = parse_schedule(task["schedule"])
     t = now.replace(second=0, microsecond=0)
-    for _ in range(grace_min() + 1):
+    for _ in range(_env_int("CRON_GRACE_MIN", 120) + 1):
         if matches(p, t):
             return t
         t -= timedelta(minutes=1)
@@ -255,7 +228,7 @@ def expire(tasks: dict, now: datetime) -> list[str]:
             task.update(enabled=False, last_status="expired")
             closed.append(task["id"])
         elif task.get("at") and not task.get("last_slot"):
-            if now - _parse_at(task["at"]) > timedelta(minutes=grace_min()):
+            if now - _parse_at(task["at"]) > timedelta(minutes=_env_int("CRON_GRACE_MIN", 120)):
                 task.update(enabled=False, last_status="missed (the container was down)")
                 closed.append(task["id"])
     return closed
@@ -275,7 +248,8 @@ def due(tasks: dict, now: datetime) -> list[tuple[datetime, dict]]:
         ts = slot.timestamp()
         if ts <= float(task.get("last_slot") or 0):
             continue  # this slot already ran (or was launched)
-        if ts < _floor_minute(float(task.get("created_at") or 0)):
+        created = float(task.get("created_at") or 0)
+        if ts < created - created % 60:
             continue  # created after this slot: its first run is the next one
         out.append((slot, task))
     return sorted(out, key=lambda st: st[0])
@@ -333,8 +307,8 @@ def add(task_id: str, chat_id: str, created_by: str, prompt: str, schedule: str 
     if task_id in tasks:
         raise ValueError(f"task {task_id!r} already exists: remove it or use another id")
     active = sum(1 for t in tasks.values() if t.get("enabled", True))
-    if active >= max_tasks():
-        raise ValueError(f"there are already {active} active tasks; the max is {max_tasks()}")
+    if active >= _env_int("CRON_MAX_TASKS", 20):
+        raise ValueError(f"there are already {active} active tasks; the max is {_env_int("CRON_MAX_TASKS", 20)}")
 
     task = {"id": task_id, "chat_id": str(chat_id).strip(), "created_by": created_by.strip(),
             "prompt": prompt, "enabled": True, "created_at": now.timestamp(), "runs": 0,
@@ -439,16 +413,10 @@ def build_prompt(task: dict, now: datetime) -> str:
 
 
 def prepare_job_config() -> Path:
-    """Settings for the job: same hooks and deny rules, without the Telegram plugin."""
+    """Empty user settings (no plugin); hooks and deny rules come from managed settings."""
     dest = job_config_dir()
     dest.mkdir(parents=True, exist_ok=True)
-    try:
-        settings = json.loads((_config_dir() / "settings.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        settings = {}
-    for key in DROP_FROM_JOB_SETTINGS:
-        settings.pop(key, None)
-    (dest / "settings.json").write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
+    (dest / "settings.json").write_text("{}\n")
     return dest
 
 
@@ -577,55 +545,22 @@ def run(task_id: str, now: datetime | None = None, runner=subprocess.run, sender
             _lock_path().unlink(missing_ok=True)
 
 
-def _has_api_key_helper(env) -> bool:
-    for f in ("/etc/claude-code/managed-settings.json",
-              os.path.join(env.get("CLAUDE_CONFIG_DIR", "/data/config"), "settings.json")):
-        try:
-            if json.load(open(f, encoding="utf-8")).get("apiKeyHelper"):
-                return True
-        except Exception:
-            pass
-    return False
-
-
-def auth_in_use(env: dict | None = None) -> str:
-    """Name (never value) of the credential Claude uses, in Claude's own precedence
-    (same order as entrypoint.sh): cloud, AUTH_TOKEN, API_KEY, apiKeyHelper, OAuth."""
-    env = os.environ if env is None else env
-    for name in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
-        if env.get(name) and env.get(name) not in ("0", "false"):
-            return name
-    for name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
-        if env.get(name):
-            return name
-    if _has_api_key_helper(env):
-        return "apiKeyHelper"
-    return "CLAUDE_CODE_OAUTH_TOKEN" if env.get("CLAUDE_CODE_OAUTH_TOKEN") else "none"
-
-
-def job_env() -> dict:
-    """Environment for the job: the OAuth token is dropped when anything ranks above it."""
-    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(prepare_job_config()), KERNEL_CRON_JOB="1")
-    if auth_in_use(env) not in ("CLAUDE_CODE_OAUTH_TOKEN", "none"):
-        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
-    return env
-
-
 def _execute(task: dict, now: datetime, runner) -> tuple[str, str, str]:
-    env = job_env()
+    # The entrypoint already dropped an outranked OAuth token; with -p a key always outranks it anyway.
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(prepare_job_config()), KERNEL_CRON_JOB="1")
     cmd = ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "text",
            build_prompt(task, now)]
     workspace = os.environ.get("AGENT_WORKSPACE", "/data/workspace")
     try:
         r = runner(cmd, cwd=workspace if os.path.isdir(workspace) else None, env=env,
-                   capture_output=True, text=True, timeout=timeout_sec())
+                   capture_output=True, text=True, timeout=_env_int("CRON_TIMEOUT_SEC", 900))
     except subprocess.TimeoutExpired:
-        return ("timed out", "", f"timeout {timeout_sec()} s")
+        return ("timed out", "", f"timeout {_env_int("CRON_TIMEOUT_SEC", 900)} s")
     except FileNotFoundError:
         return ("claude is not in the image", "", "")
     output = (r.stdout or "").strip()
     if r.returncode != 0:
-        return (f"failed with exit code {r.returncode}; if this persists, check that {auth_in_use(env)} is valid",
+        return (f"failed with exit code {r.returncode}; if this persists, check that {os.environ.get('AUTH_VIA') or 'the credential'} is valid",
                 output, (r.stderr or "")[-2000:])
     if not output:
         return ("finished without an answer", "", (r.stderr or "")[-2000:])
@@ -645,8 +580,7 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--chat-id", required=True)
     a.add_argument("--created-by", required=True)
     a.add_argument("--prompt", required=True)
-    ls = sub.add_parser("list")
-    ls.add_argument("--json", action="store_true")
+    sub.add_parser("list")
     for name in ("remove", "pause", "resume", "run"):
         sub.add_parser(name).add_argument("--id", required=True)
     sub.add_parser("tick")
@@ -662,9 +596,6 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "list":
             tasks = load()
-            if args.json:
-                print(json.dumps(tasks, ensure_ascii=False, indent=2))
-                return 0
             if not tasks:
                 print("(no tasks)")
             for t in sorted(tasks.values(), key=lambda x: x["id"]):

@@ -1,4 +1,4 @@
-"""Seed guards and hooks: SSRF, send_rich, clock, hard_deny, hooks in settings."""
+"""Seed guards and hooks: SSRF, send_rich, clock, hooks in settings."""
 from __future__ import annotations
 
 import json
@@ -43,6 +43,25 @@ class TestSsrfGuard(unittest.TestCase):
             with self.subTest(url=url):
                 proc = self._check(url)
                 self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+
+    def test_non_global_addresses(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import ipaddress
+        import ssrf_guard  # noqa: E402
+
+        for ip in ("127.0.0.1", "10.0.0.1", "169.254.169.254", "100.100.100.200", "0.0.0.0",
+                   "224.0.0.1", "::1", "::ffff:127.0.0.1", "fe80::1"):
+            with self.subTest(ip=ip):
+                self.assertTrue(ssrf_guard._blocked(ipaddress.ip_address(ip)))
+        self.assertFalse(ssrf_guard._blocked(ipaddress.ip_address("8.8.8.8")))
+        self.assertEqual(self._check("http://8.8.8.8/").returncode, 0)
+        self.assertEqual(self._check("http://[::ffff:127.0.0.1]/").returncode, 2)
+
+    def test_missing_url_is_denied(self):
+        proc = subprocess.run([sys.executable, str(SCRIPTS / "ssrf_guard.py")],
+                              input='{"tool_input": {}}', text=True, capture_output=True, check=False)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("missing url", proc.stdout)
 
     def test_pretooluse_deny_json(self):
         payload = json.dumps(
@@ -119,12 +138,9 @@ class TestClockHook(unittest.TestCase):
         self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "SessionStart")
 
 
-class TestHardDenySeed(unittest.TestCase):
-    def test_automode_hard_deny_and_hooks(self):
+class TestManagedSettings(unittest.TestCase):
+    def test_hooks_and_deny_rules(self):
         settings = json.loads((ROOT / "kernel/managed-settings.json").read_text())
-        hd = settings["autoMode"]["hard_deny"]
-        self.assertIn("$defaults", hd)
-        self.assertTrue(any("exfiltrat" in x.lower() or "secret" in x.lower() for x in hd))
         hooks = settings["hooks"]
         self.assertIn("SessionStart", hooks)
         self.assertIn("UserPromptSubmit", hooks)

@@ -28,7 +28,7 @@ logs="$(docker logs "$c" 2>&1)"
 check "fake keys: reaches tmux and heartbeat" grep -q 'heartbeat OK' <<<"$logs"
 # shellcheck disable=SC2016
 check "claude runs as agent, not root" docker exec -u agent "$c" bash -c '[ "$(stat -c %U "/proc/$(tmux -L l2 list-panes -F "#{pane_pid}")")" = agent ]'
-check "heartbeat file is written on /data" docker exec "$c" test -s /data/config/heartbeat
+check "baked plugin is copied to /data" docker exec "$c" bash -c 'compgen -G "/data/config/plugins/cache/claude-plugins-official/telegram/*/server.ts"'
 
 docker exec -u agent "$c" bash -c 'kill "$(tmux -L l2 list-panes -F "#{pane_pid}")"'
 code="$(timeout 20 docker wait "$c")"

@@ -56,7 +56,7 @@ tests/                         L0 static+unit · L1 entrypoint · L2 image smoke
 
 ## Features (batch 1)
 
-- **Telegram** via the official `telegram@claude-plugins-official` plugin; only the owner is allowed on first boot.
+- **Telegram** via the official `telegram@claude-plugins-official` plugin; only the owner is allowed on first boot. The client image must bake the plugin (see `examples/client/Dockerfile`); the kernel never installs it at runtime and exits 1 if it is missing.
 - **Heartbeat**: every `HEARTBEAT_SEC` (30 s) the kernel checks the Claude pane is actually alive
   (a zombie is not alive) and exits 1 if not, so the platform restarts the container.
 - **Scheduled tasks** (`cron.py` + `scheduled-tasks` skill): survive restarts, run in a separate
@@ -107,23 +107,21 @@ and is billed by Anthropic (or their cloud provider) directly. The project never
 for anyone's credential. The kernel never logs, copies or sends credentials; it logs only the *name* of the
 variable in use (`auth: ANTHROPIC_API_KEY`).
 
-The agent boots with at least one of these. When several are set, the kernel resolves them in Claude Code's
-own precedence, so the logged name is the one actually used: cloud (`CLAUDE_CODE_USE_BEDROCK` /
-`_VERTEX` / `_FOUNDRY`) > `ANTHROPIC_AUTH_TOKEN` > `ANTHROPIC_API_KEY` > `apiKeyHelper` (managed settings) >
-`CLAUDE_CODE_OAUTH_TOKEN`.
+Claude is the source of truth: at boot the kernel runs `claude auth status` and logs the source it reports
+(`apiKeySource`, else `authMethod`, e.g. `auth: ANTHROPIC_API_KEY` or `auth: oauth_token`). If it reports
+not logged in, the boot logs `MISSING credential` and exits 1. Known limit: `ANTHROPIC_AUTH_TOKEN` reports as
+`oauth_token`.
 
 | Credential | Notes |
 |---|---|
 | `ANTHROPIC_API_KEY` | **Recommended** for agents that serve other people or Telegram groups. Console key, usage-billed. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | A Claude subscription token (`claude setup-token`). Meant for the owner's own ordinary individual use; its limits assume that use and Anthropic may enforce its terms. We make no promise that a subscription may be used for an always-on agent or for groups. Team/Enterprise subscriptions: an Owner must enable channels for the organization. |
 | `ANTHROPIC_AUTH_TOKEN` / `apiKeyHelper` | Bearer token or key helper (e.g. a company gateway). |
-| `CLAUDE_CODE_USE_BEDROCK=1` / `_VERTEX=1` / `_FOUNDRY=1` | Your own cloud account and its env. The agent runs **without Telegram channels** there (boot logs a `WARN`). |
+| `CLAUDE_CODE_USE_BEDROCK=1` / `_VERTEX=1` / `_FOUNDRY=1` | Your own cloud account and its env. The agent runs **without Telegram channels** there (any provider other than `firstParty`; boot logs a `WARN`). |
 
-If none is set, the boot logs `MISSING credential` with every option and exits 1.
-
-**OAuth token plus anything ranked above it:** the higher one wins and the log shows a `WARN`. `claude -p` (scheduled tasks)
-always uses the key when present, while the interactive session uses it only once it is approved; without
-one rule, chat and cron could bill different accounts. So the kernel drops the token from the environment of
+**API key plus OAuth token:** the log shows a `WARN` and the key wins. With `-p` (scheduled tasks) the key
+always outranks the token, while the interactive session uses it only once it is approved; without one rule,
+chat and cron could bill different accounts. So the kernel drops the token from the environment of
 both (L1 asserts the Claude pane has no token) and pre-approves the key in `/data/config/.claude.json` by its last 20 characters only (how Claude Code
 records approved keys); the full key stays in the environment. With a token only, nothing is written to
 `customApiKeyResponses`, and the token is never copied to the volume.
@@ -143,7 +141,7 @@ Based on Anthropic's [Development containers](https://docs.anthropic.com/en/docs
   the container, you can pass `--dangerously-skip-permissions` for unattended operation." The entrypoint starts
   as root only to verify guards, set up the firewall and fix volume ownership, then drops to `agent` (uid 1000).
 - **Managed settings** at `/etc/claude-code/managed-settings.json` (root-owned, highest precedence): deny rules
-  (destructive commands, `.env`, credentials, editing kernel files), auto-mode hard-deny rules, and hooks
+  (destructive commands, `.env`, credentials, editing kernel files) and hooks
   (clock, SSRF guard, cron context). Clients add rules in their own user/project settings; they cannot loosen these.
 - **Boot guard check.** A sha256 manifest of the kernel files is built into the image; if a client layer
   overwrites a guard, the container refuses to start. (This catches mistakes, not a hostile image builder.)
@@ -173,8 +171,8 @@ model id) and the kernel writes `advisorModel` into the user settings at boot (t
 | Level | Runs | Proves |
 |---|---|---|
 | L0 `tests/l0-static.sh` | shellcheck, hadolint, JSON/YAML/TOML, Python unit tests, gitleaks | files are sane; cron, guards, rich messages behave; base image has no Claude Code; advisor off when unset |
-| L1 `tests/l1-unit.sh` | entrypoint with a stub `claude` | auth precedence (OAuth, key, both, AUTH_TOKEN, Foundry), missing credential fails fast, no token in the pane env, boot order, seeding rules, setup-screen detection; heartbeat: zombie, hung Claude, no `bun server.ts`, dropped channel → exit 1; dead credential → one owner alert, no restart |
-| L2 `tests/l2-docker.sh` | real image + stub client layer, `--network none` | image builds, guards are `root:644`, tampered guard refuses boot, heartbeat on `/data`, killed Claude → container exits 1 |
+| L1 `tests/l1-unit.sh` | entrypoint with a stub `claude` | auth from `claude auth status` (OAuth, key, both, cloud), missing credential and missing baked plugin fail fast, no token in the pane env, boot order, seeding rules, setup-screen detection; heartbeat: zombie, hung Claude, no `bun server.ts`, dropped channel → exit 1; dead credential → one owner alert, no restart |
+| L2 `tests/l2-docker.sh` | real image + stub client layer, `--network none` | image builds, guards are `root:644`, tampered guard refuses boot, baked plugin copied to `/data`, killed Claude → container exits 1 |
 
 CI runs all three on every PR; pushes to `main` also publish `ghcr.io/pixan-ai/pixan-kernel`.
 

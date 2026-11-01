@@ -9,23 +9,24 @@ cd "$(dirname "$0")/.." || exit 1
 tmp="$(mktemp -d)"; trap 'tmux -L "k-l1-$$" kill-server 2>/dev/null; rm -rf "$tmp"' EXIT
 export PATH="$PWD/tests/stubs:$PATH" KERNEL_DIR="$PWD/kernel" DATA_DIR="$tmp/data" TMUX_TMPDIR="$tmp" \
        CLAUDE_CONFIG_DIR="$tmp/data/config" AGENT_NAME="k-l1-$$" BOOT_WAIT_SEC=1 HEARTBEAT_SEC=1 \
-       STUCK_INTERVAL_SEC=0 MANAGED_SETTINGS="$PWD/kernel/managed-settings.json" CURL_LOG="$tmp/curl"
+       CURL_LOG="$tmp/curl"
 keys=(ANTHROPIC_API_KEY=sk-ant-test-0000000000000000000000 TELEGRAM_BOT_TOKEN=fake-bot OWNER_TELEGRAM_ID=42)
-boot() { env "$@" ./kernel/entrypoint.sh > "$tmp/out" 2>&1; }
+# Stands in for the plugin a client image bakes (no /opt/client here).
+bake() { mkdir -p "$DATA_DIR/config/plugins/cache/claude-plugins-official/telegram/0.0.1" \
+  && touch "$DATA_DIR/config/plugins/cache/claude-plugins-official/telegram/0.0.1/server.ts"; }
+boot() { bake; env "$@" ./kernel/entrypoint.sh > "$tmp/out" 2>&1; }
 
 base=(TELEGRAM_BOT_TOKEN=fake-bot OWNER_TELEGRAM_ID=42)
 boot "${base[@]}" STUB_CLAUDE=exit
 check "no credential: fails fast with MISSING" grep -q 'MISSING credential' "$tmp/out"
-check "no credential: MISSING lists every option" grep -q 'BEDROCK/VERTEX/FOUNDRY=1, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY, apiKeyHelper or CLAUDE_CODE_OAUTH_TOKEN' "$tmp/out"
 check "no credential: writes nothing" test ! -e "$DATA_DIR/workspace/CLAUDE.md"
 
 boot "${base[@]}" CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-test-1111111111111111 STUB_CLAUDE=exit
-check "OAuth only: boots past auth" grep -q 'auth: CLAUDE_CODE_OAUTH_TOKEN' "$tmp/out"
+check "OAuth only: boots past auth (name from claude auth status)" grep -q 'auth: oauth_token' "$tmp/out"
 check "OAuth only: onboarding and trust seeded" grep -q '"hasTrustDialogAccepted": true' "$DATA_DIR/config/.claude.json"
-check "OAuth only: plugin installed before claude starts" grep -q 'plugin: stub-claude plugin install telegram@claude-plugins-official' "$tmp/out"
 check "OAuth only: no approved key entry" absent customApiKeyResponses "$(cat "$DATA_DIR/config/.claude.json")"
 check "OAuth only: token never written to the volume" absent 1111111111111111 "$(cat "$tmp/out"; grep -r . "$DATA_DIR" 2>/dev/null)"
-check "dead claude: alert names the credential in use" grep -q 'did not start (auth: CLAUDE_CODE_OAUTH_TOKEN)' "$tmp/out"
+check "dead claude: alert names the credential in use" grep -q 'did not start (auth: oauth_token)' "$tmp/out"
 rm -rf "$DATA_DIR"
 
 boot "${keys[@]}" CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-test-1111111111111111 STUB_CLAUDE=exit
@@ -35,11 +36,12 @@ check "both set: key pre-approved" grep -q '"00000000000000000000"' "$DATA_DIR/c
 check "both set: no secret value in the log" absent 0000000000 "$(cat "$tmp/out")"
 rm -rf "$DATA_DIR"
 
-boot "${base[@]}" ANTHROPIC_AUTH_TOKEN=at ANTHROPIC_API_KEY=k CLAUDE_CODE_OAUTH_TOKEN=t STUB_CLAUDE=exit
-check "precedence: ANTHROPIC_AUTH_TOKEN beats key and token" grep -q 'auth: ANTHROPIC_AUTH_TOKEN' "$tmp/out"
-boot "${base[@]}" CLAUDE_CODE_USE_FOUNDRY=1 ANTHROPIC_API_KEY=k STUB_CLAUDE=exit
-check "precedence: Foundry (cloud) wins" grep -q 'auth: CLAUDE_CODE_USE_FOUNDRY' "$tmp/out"
-check "cloud: warns there are no Telegram channels" grep -q 'WARN CLAUDE_CODE_USE_FOUNDRY: Telegram channels are not available' "$tmp/out"
+boot "${base[@]}" CLAUDE_CODE_USE_BEDROCK=1 STUB_CLAUDE=exit
+check "cloud: name from claude auth status" grep -q 'auth: third_party' "$tmp/out"
+check "cloud: warns there are no Telegram channels" grep -q 'WARN third_party: Telegram channels need the Anthropic API' "$tmp/out"
+rm -rf "$DATA_DIR"
+mkdir -p "$DATA_DIR"; env "${keys[@]}" STUB_CLAUDE=exit ./kernel/entrypoint.sh > "$tmp/out" 2>&1
+check "plugin not baked: exits with error" grep -q 'ERROR: Telegram plugin missing' "$tmp/out"
 rm -rf "$DATA_DIR"
 
 boot "${keys[@]}" STUB_CLAUDE=exit
@@ -49,7 +51,7 @@ check "CLAUDE.md gets the agent name" grep -q "You are \*\*k-l1-$$\*\*" "$DATA_D
 check "SOUL.md seeded" grep -q "SOUL — k-l1-$$" "$DATA_DIR/workspace/SOUL.md"
 check "scheduled-tasks skill seeded" test -f "$DATA_DIR/workspace/.claude/skills/scheduled-tasks/SKILL.md"
 check "owner in allowlist" grep -q '"42"' "$DATA_DIR/config/channels/telegram/access.json"
-check "bot token file is private" test "$(stat -c %a "$DATA_DIR/config/channels/telegram/.env")" = 600
+check "bot token is not written to the volume" absent fake-bot "$(grep -r . "$DATA_DIR" 2>/dev/null)"
 check "API key pre-approved (last 20 chars only)" grep -q '"00000000000000000000"' "$DATA_DIR/config/.claude.json"
 
 echo "edited by owner" > "$DATA_DIR/workspace/SOUL.md"
@@ -104,10 +106,9 @@ check "dead credential: bot token not on curl's command line" absent 'fake-bot' 
 stop
 
 # Alive, then killed: the heartbeat must notice (zombie != alive).
-env "${keys[@]}" ./kernel/entrypoint.sh > "$tmp/out" 2>&1 & pid=$!
+bake; env "${keys[@]}" ./kernel/entrypoint.sh > "$tmp/out" 2>&1 & pid=$!
 for _ in $(seq 1 20); do grep -q 'heartbeat OK' "$tmp/out" && break; sleep 0.5; done
 check "alive: heartbeat OK" grep -q 'heartbeat OK' "$tmp/out"
-check "alive: heartbeat file is fresh" test $(( $(date +%s) - $(cat "$DATA_DIR/config/heartbeat") )) -le 2
 kill "$(tmux -L "$AGENT_NAME" list-panes -F '#{pane_pid}')"
 for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
 kill "$pid" 2>/dev/null; wait "$pid"; code=$?

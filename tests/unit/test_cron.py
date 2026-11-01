@@ -168,9 +168,7 @@ class TestRun(Base):
         job_cfg = calls[0][1]["env"]["CLAUDE_CONFIG_DIR"]
         with open(os.path.join(job_cfg, "settings.json")) as f:
             settings = json.load(f)
-        self.assertNotIn("enabledPlugins", settings)
-        self.assertNotIn("channelsEnabled", settings)
-        self.assertEqual(settings["permissions"]["deny"], ["Read(**/.env)"])  # the perimeter stays
+        self.assertEqual(settings, {})  # hooks and deny rules come from managed settings
 
     def test_quiet_answer_sends_nothing(self):
         self.add_daily()
@@ -213,54 +211,13 @@ class TestRun(Base):
 
 
 class TestJobAuth(Base):
-    """The cron `claude -p` follows the same credential rule as the live session."""
-
-    def env_for(self, **creds):
-        clean = {k: v for k, v in os.environ.items()
-                 if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-                              "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
-                              "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_AUTH_TOKEN")}
-        with mock.patch.dict(os.environ, {**clean, **creds}, clear=True):
-            return cron.job_env()
-
-    def test_oauth_only_is_kept(self):
-        env = self.env_for(CLAUDE_CODE_OAUTH_TOKEN="tok")
-        self.assertEqual(env.get("CLAUDE_CODE_OAUTH_TOKEN"), "tok")
-        self.assertEqual(cron.auth_in_use(env), "CLAUDE_CODE_OAUTH_TOKEN")
-
-    def test_key_only(self):
-        env = self.env_for(ANTHROPIC_API_KEY="key")
-        self.assertEqual(cron.auth_in_use(env), "ANTHROPIC_API_KEY")
-
-    def test_both_set_key_wins_and_token_is_dropped(self):
-        env = self.env_for(ANTHROPIC_API_KEY="key", CLAUDE_CODE_OAUTH_TOKEN="tok")
-        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
-        self.assertEqual(cron.auth_in_use(env), "ANTHROPIC_API_KEY")
-
-    def test_bedrock(self):
-        self.assertEqual(cron.auth_in_use(self.env_for(CLAUDE_CODE_USE_BEDROCK="1")), "CLAUDE_CODE_USE_BEDROCK")
-
-    def test_precedence_matches_claude(self):
-        all_set = dict(CLAUDE_CODE_OAUTH_TOKEN="tok", ANTHROPIC_API_KEY="key", ANTHROPIC_AUTH_TOKEN="at")
-        self.assertEqual(cron.auth_in_use(self.env_for(**all_set)), "ANTHROPIC_AUTH_TOKEN")
-        self.assertEqual(cron.auth_in_use(self.env_for(CLAUDE_CODE_USE_FOUNDRY="1", **all_set)),
-                         "CLAUDE_CODE_USE_FOUNDRY")
-        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", self.env_for(**all_set))
-
-    def test_api_key_helper_ranks_above_oauth(self):
-        cfg = os.environ["CLAUDE_CONFIG_DIR"]
-        with open(os.path.join(cfg, "settings.json"), "w") as f:
-            json.dump({"apiKeyHelper": "/bin/echo k"}, f)
-        env = self.env_for(CLAUDE_CODE_OAUTH_TOKEN="tok")
-        self.assertEqual(cron.auth_in_use(env), "apiKeyHelper")
-        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
+    """A failed run names the credential the entrypoint resolved (AUTH_VIA)."""
 
     def test_failure_names_the_credential_in_use(self):
         self.add_daily()
         sent = []
         runner = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="401")  # noqa: E731
-        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "tok"}):
-            os.environ.pop("ANTHROPIC_API_KEY", None)
+        with mock.patch.dict(os.environ, {"AUTH_VIA": "CLAUDE_CODE_OAUTH_TOKEN"}):
             cron.run("purchase-order", at("2026-09-14 09:00"), runner,
                      lambda chat, text: sent.append(text) or (True, "ok"))
         self.assertIn("if this persists, check that CLAUDE_CODE_OAUTH_TOKEN is valid", sent[0])

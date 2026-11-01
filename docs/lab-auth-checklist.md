@@ -20,10 +20,10 @@ For each case below:
 | # | Environment | Expected log | Telegram | Cron | Billed to |
 |---|---|---|---|---|---|
 | 1 | `ANTHROPIC_API_KEY` only | `auth: ANTHROPIC_API_KEY` | ☐ | ☐ | Console |
-| 2 | `CLAUDE_CODE_OAUTH_TOKEN` only | `auth: CLAUDE_CODE_OAUTH_TOKEN` | ☐ | ☐ | Subscription |
+| 2 | `CLAUDE_CODE_OAUTH_TOKEN` only | `auth: oauth_token` | ☐ | ☐ | Subscription |
 | 3 | Key and token set | `WARN both ...` then `auth: ANTHROPIC_API_KEY` | ☐ | ☐ | Console, for **both** chat and cron |
-| 4 | `CLAUDE_CODE_USE_BEDROCK=1` (or Vertex/Foundry) + cloud env | `WARN ... WITHOUT Telegram`, `auth: CLAUDE_CODE_USE_BEDROCK` | n/a (no channels) | ☐ (run `cron.py run`, check the log) | Cloud account |
-| 5 | None | `MISSING credential: ...`, exit 1 | n/a | n/a | n/a |
+| 4 | `CLAUDE_CODE_USE_BEDROCK=1` (or Vertex/Foundry) + cloud env | `WARN ... WITHOUT Telegram`, `auth:` with the name `claude auth status` reports | n/a (no channels) | ☐ (run `cron.py run`, check the log) | Cloud account |
+| 5 | None | `MISSING credential: claude auth status reports not logged in`, exit 1 | n/a | n/a | n/a |
 
 **Case 2 must settle one open question.** Earlier tests with a token showed
 `--channels ignored ... Channels are not currently available` on screen. Was that caused by a fake/invalid
@@ -39,6 +39,7 @@ token? Run case 2 with a **real, valid** token from `claude setup-token`:
 |---|---|---|---|
 | A | Unauthorized Telegram ID is dropped | Message the bot from a second account that is **not** `OWNER_TELEGRAM_ID` | No reply, no pairing code; the owner's chat still works (`dmPolicy: allowlist`) |
 | B | Telegram server killed | `docker exec <agent> pkill -f 'bun.*server.ts'` | Within ~2 heartbeats: `ERROR: Telegram server (bun server.ts) is not running`, container exits 1 and the platform restarts it; Telegram replies again after restart |
+| D | Plugin reads the bot token from env | Any working case: confirm `/data/config/channels/telegram/.env` does **not** exist | Telegram still replies (the plugin reads `TELEGRAM_BOT_TOKEN` from the environment) |
 | C | Revoked credential alerts the owner | Revoke the key (Console) or token, then message the bot | Log `ERROR: credential rejected (auth: X); not restarting`; the owner gets **one** Telegram alert naming X; the container keeps running (no restart loop) |
 
 Result: ☐ all pass → OK to merge. Any failure: do not merge; note the case number and the log line.

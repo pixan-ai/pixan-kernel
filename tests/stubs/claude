@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Stand-in for Claude Code in tests. `claude plugin ...` fakes the Telegram plugin install.
+# Stand-in for Claude Code in tests. `claude auth status` answers like Claude 2.1.x (JSON, exit 0).
 # STUB_CLAUDE: exit = dies at once; prompt = theme picker; hung = frozen mid-activity;
 # noserver = no Telegram server; dropped = channel drops messages; authdead = credential rejected;
 # anything else = alive with a fake `bun server.ts`, until killed.
-if [ "${1:-}" = plugin ]; then
-  echo "stub-claude $*"
-  [ "${2:-}" = install ] && mkdir -p "$CLAUDE_CONFIG_DIR/plugins/cache/claude-plugins-official/telegram/0.0.1" \
-    && touch "$CLAUDE_CONFIG_DIR/plugins/cache/claude-plugins-official/telegram/0.0.1/server.ts"
+if [ "${1:-} ${2:-}" = "auth status" ]; then
+  if [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ]; then echo '{"loggedIn":true,"authMethod":"third_party","apiProvider":"bedrock"}'
+  elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then echo '{"loggedIn":true,"authMethod":"api_key","apiProvider":"firstParty","apiKeySource":"ANTHROPIC_API_KEY"}'
+  elif [ -n "${ANTHROPIC_AUTH_TOKEN:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then echo '{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}'
+  else echo '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}'; fi
   exit 0
 fi
 echo "stub-claude $*"

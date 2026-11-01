@@ -24,34 +24,19 @@ fi
 mkdir -p "$WS" "$CFG/channels/telegram"
 
 # 2. Auth: the person's own credential, set in their own environment. Never logged or copied.
-#    Resolved in Claude Code's own precedence, so the name we log/alert is the one actually used:
-#    cloud (Bedrock/Vertex/Foundry) > ANTHROPIC_AUTH_TOKEN > ANTHROPIC_API_KEY > apiKeyHelper > OAuth token.
-#    When anything outranks the OAuth token, the token is dropped from the environment so chat
-#    and cron (`claude -p`) can never bill different accounts.
-on() { [ -n "${!1:-}" ] && [ "${!1}" != 0 ] && [ "${!1}" != false ]; }
-MANAGED="${MANAGED_SETTINGS:-/etc/claude-code/managed-settings.json}"
-AUTH_VIA=""
-for v in CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY; do
-  on "$v" && { AUTH_VIA=$v; break; }
-done
-if [ -z "$AUTH_VIA" ]; then
-  if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then AUTH_VIA=ANTHROPIC_AUTH_TOKEN
-  elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then AUTH_VIA=ANTHROPIC_API_KEY
-  elif jq -e '.apiKeyHelper // empty' "$MANAGED" >/dev/null 2>&1; then AUTH_VIA=apiKeyHelper
-  elif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then AUTH_VIA=CLAUDE_CODE_OAUTH_TOKEN
-  else
-    log "MISSING credential: set one of CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY=1, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY, apiKeyHelper or CLAUDE_CODE_OAUTH_TOKEN"; exit 1
-  fi
-fi
-if [ "$AUTH_VIA" != CLAUDE_CODE_OAUTH_TOKEN ] && [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-  log "WARN both $AUTH_VIA and CLAUDE_CODE_OAUTH_TOKEN are set: using $AUTH_VIA for chat and cron; CLAUDE_CODE_OAUTH_TOKEN is ignored"
+#    Claude itself reports which credential it uses (`claude auth status`, JSON); we log only its name.
+command -v claude >/dev/null || { log "ERROR: claude is not installed (build a client image)"; exit 1; }
+if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  log "WARN both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set: using ANTHROPIC_API_KEY for chat and cron; CLAUDE_CODE_OAUTH_TOKEN is ignored"
   unset CLAUDE_CODE_OAUTH_TOKEN
 fi
-CHANNELS=1
-case "$AUTH_VIA" in CLAUDE_CODE_USE_*)
-  CHANNELS=0; log "WARN $AUTH_VIA: Telegram channels are not available on cloud providers; the agent runs WITHOUT Telegram" ;;
-esac
-export AUTH_VIA; log "auth: $AUTH_VIA"   # the variable name only, never its value
+status="$(claude auth status 2>/dev/null || true)"
+jq -e '.loggedIn == true' >/dev/null 2>&1 <<<"$status" || { log "MISSING credential: claude auth status reports not logged in"; exit 1; }
+AUTH_VIA="$(jq -r '.apiKeySource // .authMethod' <<<"$status")"; CHANNELS=1
+if [ "$(jq -r .apiProvider <<<"$status")" != firstParty ]; then
+  CHANNELS=0; log "WARN $AUTH_VIA: Telegram channels need the Anthropic API; the agent runs WITHOUT Telegram"
+fi
+export AUTH_VIA; log "auth: $AUTH_VIA"   # the credential's name only, never its value
 for v in TELEGRAM_BOT_TOKEN OWNER_TELEGRAM_ID; do
   [ -n "${!v:-}" ] || { log "MISSING $v"; exit 1; }   # presence only; values never printed
 done
@@ -89,24 +74,17 @@ key="${ANTHROPIC_API_KEY:-}"
   "$CFG/.claude.json" > "$CFG/.claude.json.tmp" && mv -f "$CFG/.claude.json.tmp" "$CFG/.claude.json"; } \
   || { log "ERROR: .claude.json"; exit 1; }
 
-# 5. Telegram: bot token, and who may talk to the bot (owner only, first boot only).
-printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN" > "$CFG/channels/telegram/.env"
+# 5. Telegram: who may talk to the bot (owner only, first boot only). The plugin reads the token from env.
 [ -f "$CFG/channels/telegram/access.json" ] || sed "s|{{OWNER}}|$OWNER_TELEGRAM_ID|" "$SEED/access.json" > "$CFG/channels/telegram/access.json"
-command -v claude >/dev/null || { log "ERROR: claude is not installed (build a client image)"; exit 1; }
-# (b) Telegram plugin, in the foreground, before Claude starts. A client image may bake it in
-#     /opt/client/config/plugins (refreshed every boot, so the plugin version follows the image digest);
-#     otherwise it is installed once, only if missing.
+# (b) Telegram plugin, baked by the client image in /opt/client/config/plugins and refreshed every boot
+#     (so the plugin version follows the image digest). Never installed at runtime.
 PLUGIN_GLOB="$CFG/plugins/cache/claude-plugins-official/telegram/*/server.ts"
 if [ "$CHANNELS" = 1 ]; then
   if [ -d /opt/client/config/plugins ]; then
     rm -rf "$CFG/plugins" && cp -r /opt/client/config/plugins "$CFG/plugins"
     find "$CFG/plugins" -maxdepth 1 -name '*.json' -exec sed -i "s|/opt/client/config|$CFG|g" {} +
   fi
-  if ! compgen -G "$PLUGIN_GLOB" >/dev/null; then
-    { claude plugin marketplace add anthropics/claude-plugins-official \
-      && claude plugin install telegram@claude-plugins-official; } 2>&1 | sed 's/^/plugin: /'
-    compgen -G "$PLUGIN_GLOB" >/dev/null || { log "ERROR: Telegram plugin could not be installed"; exit 1; }
-  fi
+  compgen -G "$PLUGIN_GLOB" >/dev/null || { log "ERROR: Telegram plugin missing (bake it in the client image)"; exit 1; }
   # (c) Kernel patches on the installed plugin (rich messages + last-inbound stamp).
   python3 "$KERNEL/bin/patch_rich_message.py" "$CFG/plugins/cache" 2>&1 | sed 's/^/rich-patch: /' || true
 fi
@@ -120,13 +98,7 @@ start() {
 }
 start --continue || start || { log "ERROR: claude did not start (auth: $AUTH_VIA)"; exit 1; }
 # A first-run/picker screen (theme picker, any "Enter to confirm" menu) blocks the session.
-# Sampled several times: one frame can be scrolled-back conversation text.
-stuck=0
-for _ in $(seq 1 "${STUCK_SAMPLES:-3}"); do
-  grep -Eq 'Enter to confirm|Choose the text style' <<<"$(t capture-pane -t "$NAME" -p)" && stuck=$((stuck + 1))
-  sleep "${STUCK_INTERVAL_SEC:-2}"
-done
-if [ "$stuck" -ge "${STUCK_SAMPLES:-3}" ]; then
+if grep -Eq 'Enter to confirm|Choose the text style' <<<"$(t capture-pane -t "$NAME" -p)"; then
   log "ERROR: claude is stuck waiting for input on screen (setup screen? check that $AUTH_VIA is valid)"; exit 1
 fi
 
@@ -153,7 +125,6 @@ started=$(date +%s); freeze=0; last_hash=""; rm -f "$CFG/auth-dead"
 log "started — heartbeat every ${HEARTBEAT_SEC:-30}s"
 while sleep "${HEARTBEAT_SEC:-30}"; do
   [ "$(t list-panes -t "$NAME" -F '#{pane_dead}' 2>/dev/null)" = "0" ] || { log "ERROR: claude died"; exit 1; }
-  date +%s > "$CFG/heartbeat"
   up=$(( $(date +%s) - started ))
   screen="$(t capture-pane -t "$NAME" -p -S -12 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -n 8)"
   if [ "$CHANNELS" = 1 ] && [ "$up" -ge "${SERVER_GRACE_SEC:-90}" ]; then

@@ -113,9 +113,8 @@ def main(argv):
     )
     results = patch_all(cache_root)
     if not results:
-        # First boot: the plugin is downloaded when claude starts, so there is
-        # nothing to patch yet. It applies on the next boot.
-        print("no plugin in cache (%s), patch pending until next boot" % cache_root)
+        # The entrypoint exits before this when the baked plugin is missing.
+        print("no plugin in cache (%s), nothing patched" % cache_root)
         return 0
     for path, status in results:
         print("%s: %s" % (path, status))
