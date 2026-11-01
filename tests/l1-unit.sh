@@ -37,8 +37,11 @@ check "both set: no secret value in the log" absent 0000000000 "$(cat "$tmp/out"
 rm -rf "$DATA_DIR"
 
 boot "${base[@]}" CLAUDE_CODE_USE_BEDROCK=1 STUB_CLAUDE=exit
-check "cloud: name from claude auth status" grep -q 'auth: third_party' "$tmp/out"
-check "cloud: warns there are no Telegram channels" grep -q 'WARN third_party: Telegram channels need the Anthropic API' "$tmp/out"
+check "cloud: name from claude auth status" grep -q 'auth: bedrock' "$tmp/out"
+check "cloud: warns there are no Telegram channels" grep -q 'WARN bedrock: Telegram channels need the Anthropic API' "$tmp/out"
+rm -rf "$DATA_DIR"
+boot "${keys[@]}" CLAUDE_CODE_USE_BEDROCK=1 STUB_CLAUDE=exit
+check "cloud + API key: named by the provider, not the key" grep -q 'auth: bedrock$' "$tmp/out"
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"; env "${keys[@]}" STUB_CLAUDE=exit ./kernel/entrypoint.sh > "$tmp/out" 2>&1
 check "plugin not baked: exits with error" grep -q 'ERROR: Telegram plugin missing' "$tmp/out"
@@ -103,7 +106,28 @@ check "dead credential: does not restart" kill -0 "$pid"
 check "dead credential: exactly one owner alert" test "$(grep -c '^---$' "$tmp/curl")" = 1
 check "dead credential: alert names AUTH_VIA, goes to the owner" grep -q 'chat_id=42.*Check that ANTHROPIC_API_KEY is valid' "$tmp/curl"
 check "dead credential: bot token not on curl's command line" absent 'fake-bot' "$(grep -v '^url' "$tmp/curl")"
+check "dead credential: heartbeat says AUTH-DEAD, not OK" absent 'heartbeat OK' "$(cat "$tmp/out")"
 stop
+check "dead credential: alert stamp persisted on /data" test -s "$DATA_DIR/config/auth-alerted"
+run "${keys[@]}" STUB_CLAUDE=authdead SERVER_GRACE_SEC=0
+wait_for 'heartbeat AUTH-DEAD'; stop
+check "dead credential, reboot within 24 h: no second alert" test "$(grep -c '^---$' "$tmp/curl")" = 1
+echo 1 > "$DATA_DIR/config/auth-alerted"
+run "${keys[@]}" STUB_CLAUDE=authdead SERVER_GRACE_SEC=0
+wait_for 'credential rejected'; stop
+check "dead credential, stamp older than 24 h: alerts again" test "$(grep -c '^---$' "$tmp/curl")" = 2
+
+for mode in badkey:ANTHROPIC_API_KEY badtoken:oauth_token; do
+  rm -f "$tmp/curl"; rm -rf "$DATA_DIR"; bake
+  if [ "${mode%%:*}" = badkey ]; then creds=("${keys[@]}"); else creds=("${base[@]}" CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-test-1111111111111111); fi
+  run "${creds[@]}" STUB_CLAUDE="${mode%%:*}" SERVER_GRACE_SEC=0
+  wait_for "credential rejected (auth: ${mode#*:})"; sleep 3
+  check "${mode%%:*}: channel notice is an auth failure, not a restart" kill -0 "$pid"
+  check "${mode%%:*}: exactly one owner alert" test "$(grep -c '^---$' "$tmp/curl")" = 1
+  check "${mode%%:*}: not reported as dropped messages" absent 'dropping messages' "$(cat "$tmp/out")"
+  stop
+done
+rm -rf "$DATA_DIR"
 
 # Alive, then killed: the heartbeat must notice (zombie != alive).
 bake; env "${keys[@]}" ./kernel/entrypoint.sh > "$tmp/out" 2>&1 & pid=$!

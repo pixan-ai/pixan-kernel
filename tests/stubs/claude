@@ -2,9 +2,12 @@
 # Stand-in for Claude Code in tests. `claude auth status` answers like Claude 2.1.x (JSON, exit 0).
 # STUB_CLAUDE: exit = dies at once; prompt = theme picker; hung = frozen mid-activity;
 # noserver = no Telegram server; dropped = channel drops messages; authdead = credential rejected;
+# badkey / badtoken = the notices Claude Code shows on screen for an invalid key / OAuth token;
 # anything else = alive with a fake `bun server.ts`, until killed.
 if [ "${1:-} ${2:-}" = "auth status" ]; then
-  if [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ]; then echo '{"loggedIn":true,"authMethod":"third_party","apiProvider":"bedrock"}'
+  if [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then  # the real CLI still reports the key
+    echo '{"loggedIn":true,"authMethod":"api_key","apiProvider":"bedrock","apiKeySource":"ANTHROPIC_API_KEY"}'
+  elif [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ]; then echo '{"loggedIn":true,"authMethod":"third_party","apiProvider":"bedrock"}'
   elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then echo '{"loggedIn":true,"authMethod":"api_key","apiProvider":"firstParty","apiKeySource":"ANTHROPIC_API_KEY"}'
   elif [ -n "${ANTHROPIC_AUTH_TOKEN:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then echo '{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}'
   else echo '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}'; fi
@@ -18,6 +21,8 @@ case "${STUB_CLAUDE:-alive}" in
   hung) echo "✻ Thinking… (esc to interrupt)" ;;
   dropped) echo "Inbound messages will be silently dropped" ;;
   authdead) echo "API Error: 401 Invalid API key · Please run /login" ;;
+  badkey) echo "plugin:telegram@claude-plugins-official: authentication rejected (401). Messages are dropped until it loads." ;;
+  badtoken) printf '%s\n' "--channels ignored (plugin:telegram@claude-plugins-official)" "Channels are not currently available" ;;
 esac
 [ "${STUB_CLAUDE:-alive}" = noserver ] || bash -c 'exec -a "bun server.ts" sleep 3600' &
 sleep 3600 & wait
