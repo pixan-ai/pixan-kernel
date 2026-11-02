@@ -121,6 +121,13 @@ run "${keys[@]}" STUB_CLAUDE=authdead SERVER_GRACE_SEC=0
 wait_for 'credential rejected'; stop
 check "dead credential, stamp older than 24 h: alerts again" test "$(grep -c '^---$' "$tmp/curl")" = 2
 
+rm -f "$tmp/curl"; rm -rf "$DATA_DIR"; bake
+run "${keys[@]}" STUB_CLAUDE=authdead SERVER_GRACE_SEC=0 CURL_FAIL=1
+wait_for 'could not alert the owner'
+for _ in $(seq 1 30); do [ "$(grep -c '^---$' "$tmp/curl")" -ge 2 ] && break; sleep 0.5; done; stop
+check "alert send fails: no stamp written" test ! -e "$DATA_DIR/config/auth-alerted"
+check "alert send fails: retried on the next beat" test "$(grep -c '^---$' "$tmp/curl")" -ge 2
+
 for mode in badkey:ANTHROPIC_API_KEY badtoken:oauth_token; do
   rm -f "$tmp/curl"; rm -rf "$DATA_DIR"; bake
   if [ "${mode%%:*}" = badkey ]; then creds=("${keys[@]}"); else creds=("${base[@]}" CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-test-1111111111111111); fi

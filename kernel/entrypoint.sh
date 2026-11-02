@@ -114,16 +114,17 @@ AUTH_DEAD_RE='Invalid API key|authentication rejected \(401\)|OAuth access token
 CHANNEL_RE='^[^[:alnum:]-]*(Messages are dropped until it loads|Channels are not currently available|--channels ignored( \(.*\))?|.*silently dropped)\.?[[:space:]]*$'
 AUTH_STAMP="$CFG/auth-alerted"; AUTH_REALERT_SEC="${AUTH_REALERT_SEC:-86400}"
 ACTIVE_RE='esc to interrupt|(^|[^A-Za-z])(Thinking|Brewing)([^A-Za-z]|$)|● Running|Calling plugin|Calling tool'
-alert_owner() {  # token goes through curl's stdin config, never on the command line
+alert_owner() {  # token goes through curl's stdin config, never on the command line; returns curl's status
   printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" \
     | curl -fsS --connect-timeout 8 --max-time 15 -K - -d "chat_id=$OWNER_TELEGRAM_ID" --data-urlencode "text=[$NAME] $1" >/dev/null 2>&1 \
-    || log "WARN could not alert the owner on Telegram"
+    || { local rc=$?; log "WARN could not alert the owner on Telegram (will retry next beat)"; return "$rc"; }
 }
 alert_once() {  # one owner alert per $AUTH_REALERT_SEC, shared by the credential and channel checks
   local last_alert; last_alert="$(cat "$AUTH_STAMP" 2>/dev/null || true)"; case "$last_alert" in ''|*[!0-9]*) last_alert=0 ;; esac
   [ $(( $(date +%s) - last_alert )) -ge "$AUTH_REALERT_SEC" ] || return 0
-  date +%s > "$AUTH_STAMP"; log "ERROR: $1 (auth: $AUTH_VIA); not restarting"
-  alert_owner "Telegram is not working: check that $AUTH_VIA is valid and channels are enabled."
+  log "ERROR: $1 (auth: $AUTH_VIA); not restarting"
+  if alert_owner "Telegram is not working: check that $AUTH_VIA is valid and channels are enabled."; then
+    date +%s > "$AUTH_STAMP"; fi  # stamp only once the owner was told; otherwise retry next beat
 }
 queue_age() {  # seconds a delivered message has waited with no transcript write after it, or "no"
   local inbound last
