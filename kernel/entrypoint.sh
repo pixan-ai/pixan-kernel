@@ -104,22 +104,24 @@ if grep -Eq 'Enter to confirm|Choose the text style' <<<"$(t capture-pane -t "$N
   log "ERROR: claude is stuck waiting for input on screen (setup screen? check that $AUTH_VIA is valid)"; exit 1
 fi
 
-# 7. Heartbeat. The credential is checked FIRST, before the channel checks: a rejected credential
-#    also turns channels off ("--channels ignored", "Channels are not currently available") or
-#    makes them drop messages ("Messages are dropped until it loads"). That does NOT restart (a
-#    restart cannot fix it): the owner gets one Telegram alert naming $AUTH_VIA, re-sent at most
-#    every 24 h (the stamp lives on /data, so it survives restarts), and the beat logs
-#    "heartbeat AUTH-DEAD" instead of OK. Otherwise exits 1 (the platform restarts us) on: dead pane,
-#    Telegram server (bun server.ts) gone, channel messages being dropped, or a TUI frozen
+# 7. Heartbeat. A rejected credential, or a Telegram channel that is off or dropping messages, does
+#    NOT restart (a restart cannot fix it): the owner gets one Telegram alert naming $AUTH_VIA,
+#    re-sent at most every 24 h (the stamp lives on /data, so it survives restarts). Otherwise exits 1
+#    (the platform restarts us) on: dead pane, Telegram server (bun server.ts) gone, or a TUI frozen
 #    mid-activity. Each beat also logs queued-message age and launches at most one due scheduled task.
 AUTH_DEAD_RE='Invalid API key|authentication rejected \(401\)|OAuth access token is invalid|OAuth token has expired|authentication_error|disabled Claude subscription access|Credit balance is too low|Please run /login|login required|Messages are dropped until it loads|--channels ignored|Channels are not currently available'
 AUTH_STAMP="$CFG/auth-alerted"; AUTH_REALERT_SEC="${AUTH_REALERT_SEC:-86400}"
 ACTIVE_RE='esc to interrupt|(^|[^A-Za-z])(Thinking|Brewing)([^A-Za-z]|$)|● Running|Calling plugin|Calling tool'
-DROP_RE='silently dropped|Messages are dropped'   # only reached when the credential is fine
 alert_owner() {  # token goes through curl's stdin config, never on the command line
   printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" \
     | curl -fsS --connect-timeout 8 --max-time 15 -K - -d "chat_id=$OWNER_TELEGRAM_ID" --data-urlencode "text=[$NAME] $1" >/dev/null 2>&1 \
     || log "WARN could not alert the owner on Telegram"
+}
+alert_once() {  # one owner alert per $AUTH_REALERT_SEC, shared by the credential and channel checks
+  local last_alert; last_alert="$(cat "$AUTH_STAMP" 2>/dev/null || true)"; case "$last_alert" in ''|*[!0-9]*) last_alert=0 ;; esac
+  [ $(( $(date +%s) - last_alert )) -ge "$AUTH_REALERT_SEC" ] || return 0
+  date +%s > "$AUTH_STAMP"; log "ERROR: $1 (auth: $AUTH_VIA); not restarting"
+  alert_owner "Telegram is not working: check that $AUTH_VIA is valid and channels are enabled."
 }
 queue_age() {  # seconds a delivered message has waited with no transcript write after it, or "no"
   local inbound last
@@ -135,19 +137,16 @@ while sleep "${HEARTBEAT_SEC:-30}"; do
   up=$(( $(date +%s) - started ))
   screen="$(t capture-pane -t "$NAME" -p -S -12 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -n 8)"
   if grep -Eiq -e "$AUTH_DEAD_RE" <<<"$screen"; then
-    last_alert="$(cat "$AUTH_STAMP" 2>/dev/null || true)"; case "$last_alert" in ''|*[!0-9]*) last_alert=0 ;; esac
-    if [ $(( $(date +%s) - last_alert )) -ge "$AUTH_REALERT_SEC" ]; then
-      date +%s > "$AUTH_STAMP"; log "ERROR: credential rejected (auth: $AUTH_VIA); not restarting"
-      alert_owner "Claude is rejecting the credential. Check that $AUTH_VIA is valid, then restart the agent."
-    fi
+    alert_once "credential rejected"
     log "heartbeat AUTH-DEAD auth=$AUTH_VIA (alerted; waiting for a valid credential)"; continue
+  fi
+  if [ "$CHANNELS" = 1 ] && [ "$up" -ge "${SERVER_GRACE_SEC:-90}" ]; then
+    pgrep -u "$(id -u)" -f 'bun.*server\.ts' >/dev/null || { log "ERROR: Telegram server (bun server.ts) is not running"; exit 1; }
+    if grep -Eiq 'silently dropped' <<<"$screen"; then alert_once "Telegram channel is dropping messages"
+      log "heartbeat AUTH-DEAD auth=$AUTH_VIA (alerted; channel not working)"; continue; fi
   fi
   # A clean screen once past the grace period proves the credential works: clear the stamp.
   [ "$up" -lt "${SERVER_GRACE_SEC:-90}" ] || rm -f "$AUTH_STAMP"
-  if [ "$CHANNELS" = 1 ] && [ "$up" -ge "${SERVER_GRACE_SEC:-90}" ]; then
-    pgrep -u "$(id -u)" -f 'bun.*server\.ts' >/dev/null || { log "ERROR: Telegram server (bun server.ts) is not running"; exit 1; }
-    ! grep -Eiq "$DROP_RE" <<<"$screen" || { log "ERROR: Telegram channel is dropping messages (see screen)"; exit 1; }
-  fi
   hash="$(sha256sum <<<"$screen")"
   if grep -Eiq "$ACTIVE_RE" <<<"$screen" && ! grep -Eiq 'Brewed |Worked for|· done' <<<"$screen" \
      && [ "$hash" = "$last_hash" ]; then freeze=$((freeze + 1)); else freeze=0; fi

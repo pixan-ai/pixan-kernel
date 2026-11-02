@@ -95,16 +95,20 @@ run "${keys[@]}" STUB_CLAUDE=noserver SERVER_GRACE_SEC=0
 wait_for 'bun server.ts) is not running'; stop
 check "no Telegram server: exit 1" test "$code" -eq 1
 
+rm -f "$tmp/curl"
 run "${keys[@]}" STUB_CLAUDE=dropped SERVER_GRACE_SEC=0
-wait_for 'dropping messages'; stop
-check "dropped channel: exit 1" test "$code" -eq 1
+wait_for 'dropping messages'; sleep 3
+check "dropped channel: does not restart" kill -0 "$pid"
+check "dropped channel: exactly one owner alert" test "$(grep -c '^---$' "$tmp/curl")" = 1
+check "dropped channel: alert fits both causes" grep -q 'Telegram is not working: check that ANTHROPIC_API_KEY is valid and channels are enabled' "$tmp/curl"
+stop; rm -f "$DATA_DIR/config/auth-alerted"
 
 rm -f "$tmp/curl"
 run "${keys[@]}" STUB_CLAUDE=authdead SERVER_GRACE_SEC=0
 wait_for 'credential rejected (auth: ANTHROPIC_API_KEY)'; sleep 3
 check "dead credential: does not restart" kill -0 "$pid"
 check "dead credential: exactly one owner alert" test "$(grep -c '^---$' "$tmp/curl")" = 1
-check "dead credential: alert names AUTH_VIA, goes to the owner" grep -q 'chat_id=42.*Check that ANTHROPIC_API_KEY is valid' "$tmp/curl"
+check "dead credential: alert names AUTH_VIA, goes to the owner" grep -q 'chat_id=42.*check that ANTHROPIC_API_KEY is valid' "$tmp/curl"
 check "dead credential: bot token not on curl's command line" absent 'fake-bot' "$(grep -v '^url' "$tmp/curl")"
 check "dead credential: heartbeat says AUTH-DEAD, not OK" absent 'heartbeat OK' "$(cat "$tmp/out")"
 stop
