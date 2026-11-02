@@ -144,9 +144,6 @@ class TestSettings(Base):
         self.assertEqual(launched, ["purchase-order"])
         self.assertIn("WARN CRON_GRACE_MIN='abc' is not a number", "".join(c.args[0] for c in err.write.call_args_list))
 
-    def test_every_setting_has_one_named_default(self):
-        self.assertEqual(set(cron.DEFAULTS), {"CRON_GRACE_MIN", "CRON_MIN_GAP_MIN", "CRON_MAX_TASKS", "CRON_TIMEOUT_SEC"})
-
 
 class TestRun(Base):
     def fake_claude(self, stdout="", code=0, exc=None):

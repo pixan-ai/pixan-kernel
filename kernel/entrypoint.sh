@@ -133,7 +133,7 @@ queue_age() {  # seconds a delivered message has waited with no transcript write
   if [ "$inbound" -gt "${last%.*}" ] 2>/dev/null || { [ -z "$last" ] && [ "$inbound" -gt 0 ]; }; then
     echo "$(( $(date +%s) - inbound ))s"; else echo no; fi
 }
-started=$(date +%s); freeze=0; last_hash=""; rm -f "$CFG/auth-dead"   # (old stamp name)
+started=$(date +%s); freeze=0; last_hash=""
 log "started — heartbeat every ${HEARTBEAT_SEC:-30}s"
 while sleep "${HEARTBEAT_SEC:-30}"; do
   [ "$(t list-panes -t "$NAME" -F '#{pane_dead}' 2>/dev/null)" = "0" ] || { log "ERROR: claude died"; exit 1; }
