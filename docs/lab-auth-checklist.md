@@ -8,7 +8,8 @@ credential into an issue, log, chat or this file; record only pass/fail.
 
 It needs a real Docker host. Alfredo's PC has no Docker, and Railway cannot test the firewall
 (no `NET_ADMIN`). Use a machine with Docker, e.g. the ThinkPad with Docker Desktop (WSL2 backend) or a
-small Linux VPS. Nothing is published: `lab/build.sh` builds the images locally from the checkout.
+small Linux VPS. Run every command below in a **Linux or WSL shell** (not PowerShell or cmd); the repo's
+`.gitattributes` keeps scripts LF so a Windows checkout does not break them (`env: 'bash\r'`). Nothing is published: `lab/build.sh` builds the images locally from the checkout.
 
 ```bash
 git clone https://github.com/pixan-ai/pixan-kernel && cd pixan-kernel

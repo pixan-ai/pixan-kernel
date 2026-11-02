@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.." || exit 1
 . tests/lib.sh
 
 check "shellcheck" shellcheck -x kernel/entrypoint.sh kernel/firewall/*.sh tests/*.sh tests/stubs/claude lab/*.sh
+for f in $(git ls-files '*.sh' tests/stubs/claude tests/stubs/curl); do check "no CR (LF only): $f" absent $'\r' "$(cat "$f")"; done
 check "hadolint: Dockerfile" hadolint --failure-threshold warning Dockerfile
 check "hadolint: client example" hadolint --failure-threshold warning examples/client/Dockerfile
 for f in $(git ls-files -co --exclude-standard '*.json'); do check "valid JSON: $f" python3 -m json.tool "$f"; done
