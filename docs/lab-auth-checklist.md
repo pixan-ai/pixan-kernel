@@ -52,6 +52,14 @@ For each case below:
 | 4 | `CLAUDE_CODE_USE_BEDROCK=1` (or Vertex/Foundry) + cloud env | `WARN ... WITHOUT Telegram`, `auth:` with the name `claude auth status` reports | n/a (no channels) | ☐ (run `cron.py run`, check the log) | Cloud account |
 | 5 | None | `MISSING credential: claude auth status reports not logged in`, exit 1 | n/a | n/a | n/a |
 
+**Case 1 must also assert** (valid key, after `SERVER_GRACE_SEC`, default 90 s): no owner alert, no
+`AUTH-DEAD` in the log, and `heartbeat OK` lines.
+
+- ☐ No alert, no `AUTH-DEAD`, `heartbeat OK`.
+- If `Messages are dropped until it loads` **stays painted** on screen with a valid credential (`docker exec -u agent lab tmux -L lab capture-pane -p -t lab`),
+  the channel-notice check is wrong and **this design must change** before merge. We have never seen that
+  screen with a valid credential, so it may be transient or may stay.
+
 **Case 2 must settle one open question.** Earlier tests with a token showed
 `--channels ignored ... Channels are not currently available` on screen. Was that caused by a fake/invalid
 token? Run case 2 with a **real, valid** token from `claude setup-token`:
@@ -69,7 +77,7 @@ token? Run case 2 with a **real, valid** token from `claude setup-token`:
 | D | Plugin reads the bot token from env | Any working case: confirm `/data/config/channels/telegram/.env` does **not** exist | Telegram still replies (the plugin reads `TELEGRAM_BOT_TOKEN` from the environment) |
 | C | Revoked credential alerts the owner | Revoke the key (Console) or token, then message the bot | Log `ERROR: credential rejected (auth: X); not restarting`, then `heartbeat AUTH-DEAD`; the owner gets **exactly one** Telegram alert naming X; `docker inspect -f '{{.RestartCount}}' lab` stays the same |
 | E | Invalid key from boot | `ANTHROPIC_API_KEY=sk-ant-invalid`, run with `--restart unless-stopped`, wait 5 min | Exactly one alert; `RestartCount` stays 0 (no "Messages are dropped" restart loop). `docker restart lab`: still no second alert (stamp in `/data/config/auth-alerted`, re-alert after 24 h) |
-| F | Invalid OAuth token from boot | `CLAUDE_CODE_OAUTH_TOKEN=invalid` only | Screen shows `--channels ignored` / `Channels are not currently available`; log `credential rejected (auth: oauth_token)`, exactly one alert, no restarts, no `heartbeat OK` |
+| F | Invalid OAuth token from boot | `CLAUDE_CODE_OAUTH_TOKEN=invalid` only | Screen shows `--channels ignored` / `Channels are not currently available`; log `ERROR: credential rejected (auth: oauth_token)` or `ERROR: Telegram channel is not working (see screen) (auth: oauth_token)`, exactly one alert, no restarts, no `heartbeat OK` |
 | G | Baked plugin | Any working case | `docker exec lab ls /data/config/plugins/cache/claude-plugins-official/telegram/` shows the version baked in the image; Telegram replies |
 | H | Firewall | Case 1 plus `-e KERNEL_FIREWALL=1 --cap-add NET_ADMIN --cap-add NET_RAW` | Log has no `ERROR: firewall`; Telegram replies; `docker exec -u agent lab curl -sS -m 5 https://example.com` fails; `docker exec -u agent lab curl -sS -m 5 -o /dev/null -w '%{http_code}' https://api.anthropic.com` answers |
 

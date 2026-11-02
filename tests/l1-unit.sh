@@ -97,7 +97,7 @@ check "no Telegram server: exit 1" test "$code" -eq 1
 
 rm -f "$tmp/curl"
 run "${keys[@]}" STUB_CLAUDE=dropped SERVER_GRACE_SEC=0
-wait_for 'dropping messages'; sleep 3
+wait_for 'Telegram channel is not working'; sleep 3
 check "dropped channel: does not restart" kill -0 "$pid"
 check "dropped channel: exactly one owner alert" test "$(grep -c '^---$' "$tmp/curl")" = 1
 check "dropped channel: alert fits both causes" grep -q 'Telegram is not working: check that ANTHROPIC_API_KEY is valid and channels are enabled' "$tmp/curl"
@@ -125,12 +125,23 @@ for mode in badkey:ANTHROPIC_API_KEY badtoken:oauth_token; do
   rm -f "$tmp/curl"; rm -rf "$DATA_DIR"; bake
   if [ "${mode%%:*}" = badkey ]; then creds=("${keys[@]}"); else creds=("${base[@]}" CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-test-1111111111111111); fi
   run "${creds[@]}" STUB_CLAUDE="${mode%%:*}" SERVER_GRACE_SEC=0
-  wait_for "credential rejected (auth: ${mode#*:})"; sleep 3
+  wait_for "not restarting"; sleep 3
   check "${mode%%:*}: channel notice is an auth failure, not a restart" kill -0 "$pid"
   check "${mode%%:*}: exactly one owner alert" test "$(grep -c '^---$' "$tmp/curl")" = 1
   check "${mode%%:*}: not reported as dropped messages" absent 'dropping messages' "$(cat "$tmp/out")"
   stop
 done
+rm -rf "$DATA_DIR"; bake
+printf '{"old-one":{"id":"old-one","chat_id":"42","created_by":"42","prompt":"hi","enabled":true,"schedule":"0 9 * * *","until":"2020-01-01"}}' > "$DATA_DIR/config/cron.json"
+run "${keys[@]}" STUB_CLAUDE=chatkey SERVER_GRACE_SEC=0
+wait_for 'heartbeat AUTH-DEAD'; sleep 2; stop
+check "'Invalid API key' in conversation text: cron still ticks" grep -q 'cron: closed: old-one' "$tmp/out"
+rm -rf "$DATA_DIR"; bake
+rm -f "$tmp/curl"
+run "${keys[@]}" STUB_CLAUDE=dropped SERVER_GRACE_SEC=60
+wait_for 'heartbeat OK'; stop
+check "channel notice inside SERVER_GRACE_SEC: heartbeat OK" grep -q 'heartbeat OK' "$tmp/out"
+check "channel notice inside SERVER_GRACE_SEC: no alert" test ! -e "$tmp/curl"
 rm -rf "$DATA_DIR"
 
 # Alive, then killed: the heartbeat must notice (zombie != alive).

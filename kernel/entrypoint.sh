@@ -109,7 +109,9 @@ fi
 #    re-sent at most every 24 h (the stamp lives on /data, so it survives restarts). Otherwise exits 1
 #    (the platform restarts us) on: dead pane, Telegram server (bun server.ts) gone, or a TUI frozen
 #    mid-activity. Each beat also logs queued-message age and launches at most one due scheduled task.
-AUTH_DEAD_RE='Invalid API key|authentication rejected \(401\)|OAuth access token is invalid|OAuth token has expired|authentication_error|disabled Claude subscription access|Credit balance is too low|Please run /login|login required|Messages are dropped until it loads|--channels ignored|Channels are not currently available'
+AUTH_DEAD_RE='Invalid API key|authentication rejected \(401\)|OAuth access token is invalid|OAuth token has expired|authentication_error|disabled Claude subscription access|Credit balance is too low|Please run /login|login required'
+# Channel notices: only on their own lines, and only after SERVER_GRACE_SEC (policy may still be loading).
+CHANNEL_RE='^[^[:alnum:]-]*(Messages are dropped until it loads|Channels are not currently available|--channels ignored( \(.*\))?|.*silently dropped)\.?[[:space:]]*$'
 AUTH_STAMP="$CFG/auth-alerted"; AUTH_REALERT_SEC="${AUTH_REALERT_SEC:-86400}"
 ACTIVE_RE='esc to interrupt|(^|[^A-Za-z])(Thinking|Brewing)([^A-Za-z]|$)|● Running|Calling plugin|Calling tool'
 alert_owner() {  # token goes through curl's stdin config, never on the command line
@@ -136,17 +138,14 @@ while sleep "${HEARTBEAT_SEC:-30}"; do
   [ "$(t list-panes -t "$NAME" -F '#{pane_dead}' 2>/dev/null)" = "0" ] || { log "ERROR: claude died"; exit 1; }
   up=$(( $(date +%s) - started ))
   screen="$(t capture-pane -t "$NAME" -p -S -12 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -n 8)"
-  if grep -Eiq -e "$AUTH_DEAD_RE" <<<"$screen"; then
-    alert_once "credential rejected"
-    log "heartbeat AUTH-DEAD auth=$AUTH_VIA (alerted; waiting for a valid credential)"; continue
-  fi
+  problem=""
+  ! grep -Eiq -e "$AUTH_DEAD_RE" <<<"$screen" || problem="credential rejected"
   if [ "$CHANNELS" = 1 ] && [ "$up" -ge "${SERVER_GRACE_SEC:-90}" ]; then
     pgrep -u "$(id -u)" -f 'bun.*server\.ts' >/dev/null || { log "ERROR: Telegram server (bun server.ts) is not running"; exit 1; }
-    if grep -Eiq 'silently dropped' <<<"$screen"; then alert_once "Telegram channel is dropping messages"
-      log "heartbeat AUTH-DEAD auth=$AUTH_VIA (alerted; channel not working)"; continue; fi
+    [ -n "$problem" ] || ! grep -Eiq -e "$CHANNEL_RE" <<<"$screen" || problem="Telegram channel is not working (see screen)"
   fi
   # A clean screen once past the grace period proves the credential works: clear the stamp.
-  [ "$up" -lt "${SERVER_GRACE_SEC:-90}" ] || rm -f "$AUTH_STAMP"
+  if [ -n "$problem" ]; then alert_once "$problem"; elif [ "$up" -ge "${SERVER_GRACE_SEC:-90}" ]; then rm -f "$AUTH_STAMP"; fi
   hash="$(sha256sum <<<"$screen")"
   if grep -Eiq "$ACTIVE_RE" <<<"$screen" && ! grep -Eiq 'Brewed |Worked for|· done' <<<"$screen" \
      && [ "$hash" = "$last_hash" ]; then freeze=$((freeze + 1)); else freeze=0; fi
@@ -156,5 +155,6 @@ while sleep "${HEARTBEAT_SEC:-30}"; do
     cron_msg="$(python3 "$KERNEL/bin/cron.py" tick 2>&1 || true)"
     [ -z "$cron_msg" ] || log "cron: $cron_msg"
   fi
-  log "heartbeat OK freeze=$freeze/${FREEZE_CYCLES:-20} queue=$(queue_age)"
+  if [ -n "$problem" ]; then log "heartbeat AUTH-DEAD auth=$AUTH_VIA ($problem; alerted, not restarting)"
+  else log "heartbeat OK freeze=$freeze/${FREEZE_CYCLES:-20} queue=$(queue_age)"; fi
 done
