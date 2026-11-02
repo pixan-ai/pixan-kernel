@@ -126,6 +126,8 @@ run "${keys[@]}" STUB_CLAUDE=authdead SERVER_GRACE_SEC=0 CURL_FAIL=1
 wait_for 'could not alert the owner'
 for _ in $(seq 1 30); do [ "$(grep -c '^---$' "$tmp/curl")" -ge 2 ] && break; sleep 0.5; done; stop
 check "alert send fails: no stamp written" test ! -e "$DATA_DIR/config/auth-alerted"
+check "alert send fails: log never says alerted" absent 'alerted' "$(cat "$tmp/out")"
+check "alert send fails: heartbeat says it will retry" grep -q 'heartbeat AUTH-DEAD.*alert not sent, will retry' "$tmp/out"
 check "alert send fails: retried on the next beat" test "$(grep -c '^---$' "$tmp/curl")" -ge 2
 
 for mode in badkey:ANTHROPIC_API_KEY badtoken:oauth_token; do

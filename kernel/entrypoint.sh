@@ -121,10 +121,11 @@ alert_owner() {  # token goes through curl's stdin config, never on the command 
 }
 alert_once() {  # one owner alert per $AUTH_REALERT_SEC, shared by the credential and channel checks
   local last_alert; last_alert="$(cat "$AUTH_STAMP" 2>/dev/null || true)"; case "$last_alert" in ''|*[!0-9]*) last_alert=0 ;; esac
+  alert_state="alerted"
   [ $(( $(date +%s) - last_alert )) -ge "$AUTH_REALERT_SEC" ] || return 0
   log "ERROR: $1 (auth: $AUTH_VIA); not restarting"
   if alert_owner "Telegram is not working: check that $AUTH_VIA is valid and channels are enabled."; then
-    date +%s > "$AUTH_STAMP"; fi  # stamp only once the owner was told; otherwise retry next beat
+    date +%s > "$AUTH_STAMP"; else alert_state="alert not sent, will retry"; fi  # stamp only once the owner was told; otherwise retry next beat
 }
 queue_age() {  # seconds a delivered message has waited with no transcript write after it, or "no"
   local inbound last
@@ -156,6 +157,6 @@ while sleep "${HEARTBEAT_SEC:-30}"; do
     cron_msg="$(python3 "$KERNEL/bin/cron.py" tick 2>&1 || true)"
     [ -z "$cron_msg" ] || log "cron: $cron_msg"
   fi
-  if [ -n "$problem" ]; then log "heartbeat AUTH-DEAD auth=$AUTH_VIA ($problem; alerted, not restarting)"
+  if [ -n "$problem" ]; then log "heartbeat AUTH-DEAD auth=$AUTH_VIA ($problem; $alert_state, not restarting)"
   else log "heartbeat OK freeze=$freeze/${FREEZE_CYCLES:-20} queue=$(queue_age)"; fi
 done
