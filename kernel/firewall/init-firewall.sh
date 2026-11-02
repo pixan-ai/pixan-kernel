@@ -2,7 +2,7 @@
 # Optional egress firewall (KERNEL_FIREWALL=1, needs --cap-add NET_ADMIN NET_RAW).
 # Follows the pattern of Anthropic's reference devcontainer init-firewall.sh:
 # default DROP, allow DNS + loopback + established, allow only resolved allowlisted IPs.
-# Extra domains: KERNEL_EGRESS_ALLOW="kepler.internal example.com" (space separated).
+# Extra domains: KERNEL_EGRESS_ALLOW="erp.internal example.com" (space separated).
 # Extra CIDRs: KERNEL_EGRESS_ALLOW_CIDR="10.0.0.0/8 192.168.1.0/24" (space separated).
 set -euo pipefail
 IFS=$'\n\t'
