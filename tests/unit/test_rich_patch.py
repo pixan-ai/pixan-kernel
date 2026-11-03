@@ -91,7 +91,7 @@ class TestRichMessagePatch(unittest.TestCase):
         self._server(rel="cache/claude-plugins-official/telegram/0.0.7")
         results = patch_all(os.path.join(self.root, "cache"))
         self.assertEqual([s for _, s in results],
-                         ["rich patched, stamp patched"] * 2)
+                         ["rich patched, stamp patched, start no-anchor"] * 2)
 
     def test_patch_all_on_empty_cache_is_not_an_error(self):
         self.assertEqual(patch_all(os.path.join(self.root, "cache")), [])

@@ -19,6 +19,7 @@ fi
 if [ "$(id -u)" -eq 0 ]; then
   if [ "${KERNEL_FIREWALL:-0}" = "1" ]; then "$KERNEL/firewall/init-firewall.sh" || { log "ERROR: firewall"; exit 1; }; fi
   mkdir -p "$WS" "$CFG/channels/telegram" && chown -R agent:agent "$DATA"
+  [ -z "${BACKUP_DIR:-}" ] || { mkdir -p "$BACKUP_DIR" && chown agent:agent "$BACKUP_DIR"; }  # e.g. a host folder
   exec runuser -u agent -- "$0"
 fi
 mkdir -p "$WS" "$CFG/channels/telegram"
@@ -43,10 +44,11 @@ for v in TELEGRAM_BOT_TOKEN OWNER_TELEGRAM_ID; do
   [ -n "${!v:-}" ] || { log "MISSING $v"; exit 1; }   # presence only; values never printed
 done
 
-# 3. Instructions: CLAUDE.md rewritten every boot; SOUL, IDENTITY and skills only if missing.
-#    A client image may ship its own in /opt/client/workspace (they win over kernel seeds).
+# 3. Instructions: CLAUDE.md rewritten every boot; SOUL, IDENTITY, USER, STACK, MEMORY and skills
+#    only if missing (they persist on the volume). A client image may ship its own in
+#    /opt/client/workspace (they win over kernel seeds). MEMORY.md is the agent's own notes.
 fill "$SEED/workspace/CLAUDE.md" > "$WS/CLAUDE.md"
-for f in SOUL.md IDENTITY.md; do
+for f in SOUL.md IDENTITY.md USER.md STACK.md MEMORY.md; do
   src="$SEED/workspace/$f"; [ -f "/opt/client/workspace/$f" ] && src="/opt/client/workspace/$f"
   [ -f "$WS/$f" ] || fill "$src" > "$WS/$f"
 done
@@ -57,13 +59,18 @@ done
 
 # 4. User settings (plugins) re-imposed every boot. Deny rules and hooks live in
 #    /etc/claude-code/managed-settings.json, which the agent cannot edit.
-cp -f "$SEED/settings.json" "$CFG/settings.json"
 # Optional advisor tool (experimental, OFF unless PIXAN_ADVISOR_MODEL is set: opus|sonnet|full id).
 # Set via the advisorModel setting, not --advisor, so a bad pairing never blocks the boot.
-if [ -n "${PIXAN_ADVISOR_MODEL:-}" ]; then
-  jq --arg m "$PIXAN_ADVISOR_MODEL" '.advisorModel = $m' "$SEED/settings.json" > "$CFG/settings.json"
-  log "advisor: $PIXAN_ADVISOR_MODEL (experimental, may use more tokens)"
-fi
+# Optional client lockdown: /opt/client/tenant-deny.json {"deny": [...]} adds deny rules on top of
+# the kernel's managed ones (it can only take permissions away, never add them).
+TENANT_DENY=/opt/client/tenant-deny.json; [ -f "$TENANT_DENY" ] || TENANT_DENY=/dev/null
+jq --arg m "${PIXAN_ADVISOR_MODEL:-}" --slurpfile t "$TENANT_DENY" '
+  (if $m == "" then . else .advisorModel = $m end)
+  | (($t[0].deny // []) | map(select(type == "string"))) as $d
+  | if ($d | length) == 0 then . else .permissions.deny = ((.permissions.deny // []) + $d | unique) end' \
+  "$SEED/settings.json" > "$CFG/settings.json" || { log "ERROR: settings.json (is /opt/client/tenant-deny.json valid JSON?)"; exit 1; }
+[ -z "${PIXAN_ADVISOR_MODEL:-}" ] || log "advisor: $PIXAN_ADVISOR_MODEL (experimental, may use more tokens)"
+[ "$TENANT_DENY" = /dev/null ] || log "tenant deny: $(jq '.permissions.deny | length' "$CFG/settings.json") rules"
 umask 077
 # (a) Onboarding + workspace trust merged in every boot (a fresh or half-written volume never
 #     shows a first-run screen). The API key is pre-approved by its last 20 chars, as Claude records it.
@@ -87,11 +94,12 @@ if [ "$CHANNELS" = 1 ]; then
     find "$CFG/plugins" -maxdepth 1 -name '*.json' -exec sed -i "s|/opt/client/config|$CFG|g" {} +
   fi
   compgen -G "$PLUGIN_GLOB" >/dev/null || { log "ERROR: Telegram plugin missing (bake it in the client image)"; exit 1; }
-  # (c) Kernel patches on the installed plugin (rich messages + last-inbound stamp).
+  # (c) Kernel patches on the installed plugin (rich messages, last-inbound stamp, /start reply).
   python3 "$KERNEL/bin/patch_rich_message.py" "$CFG/plugins/cache" 2>&1 | sed 's/^/rich-patch: /' || true
 fi
 
-# (d) Claude inside tmux (it needs a terminal). --continue resumes the previous conversation.
+# (d) Claude inside tmux (it needs a terminal). --continue resumes the previous conversation;
+#     a session reset (step 7) starts a fresh one without restarting the container.
 cd "$WS"
 start() {
   t kill-server 2>/dev/null || true
@@ -108,24 +116,31 @@ fi
 #    NOT restart (a restart cannot fix it): the owner gets one Telegram alert naming $AUTH_VIA,
 #    re-sent at most every 24 h (the stamp lives on /data, so it survives restarts). Otherwise exits 1
 #    (the platform restarts us) on: dead pane, Telegram server (bun server.ts) gone, or a TUI frozen
-#    mid-activity. Each beat also logs queued-message age and launches at most one due scheduled task.
+#    mid-activity. Each beat also logs queued-message age (alerting the owner past QUEUE_ALERT_SEC),
+#    launches at most one due scheduled task, makes the hourly encrypted backup when due, and
+#    resets an idle session (SESSION_RESET_IDLE_MIN / SESSION_RESET_HOUR).
 AUTH_DEAD_RE='Invalid API key|authentication rejected \(401\)|OAuth access token is invalid|OAuth token has expired|authentication_error|disabled Claude subscription access|Credit balance is too low|Please run /login|login required'
 # Channel notices: only on their own lines, and only after SERVER_GRACE_SEC (policy may still be loading).
-CHANNEL_RE='^[^[:alnum:]-]*(Messages are dropped until it loads|Channels are not currently available|--channels ignored( \(.*\))?|.*silently dropped)\.?[[:space:]]*$'
-AUTH_STAMP="$CFG/auth-alerted"; AUTH_REALERT_SEC="${AUTH_REALERT_SEC:-86400}"
+CHANNEL_RE='^[^[:alnum:]-]*(Messages are dropped until it loads|Channels are not currently available|--channels ignored( \(.*\))?|(Inbound )?messages (will be|are) silently dropped)\.?[[:space:]]*$'
+AUTH_STAMP="$CFG/auth-alerted"; AUTH_REALERT_SEC="${AUTH_REALERT_SEC:-86400}"; RESET_STAMP="$CFG/session-reset-at"
 ACTIVE_RE='esc to interrupt|(^|[^A-Za-z])(Thinking|Brewing)([^A-Za-z]|$)|● Running|Calling plugin|Calling tool'
 alert_owner() {  # token goes through curl's stdin config, never on the command line; returns curl's status
+  # Owner notify filter: the text passes the secret filter, so a token on screen never reaches the chat.
+  local text; text="$(printf '%s' "[$NAME] $1" | python3 "$KERNEL/bin/secret_filter.py" redact)" || text="[$NAME] (alert withheld: secret filter failed)"
   printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" \
-    | curl -fsS --connect-timeout 8 --max-time 15 -K - -d "chat_id=$OWNER_TELEGRAM_ID" --data-urlencode "text=[$NAME] $1" >/dev/null 2>&1 \
+    | curl -fsS --connect-timeout 8 --max-time 15 -K - -d "chat_id=$OWNER_TELEGRAM_ID" --data-urlencode "text=$text" >/dev/null 2>&1 \
     || { local rc=$?; log "WARN could not alert the owner on Telegram (will retry next beat)"; return "$rc"; }
 }
-alert_once() {  # one owner alert per $AUTH_REALERT_SEC, shared by the credential and channel checks
-  local last_alert; last_alert="$(cat "$AUTH_STAMP" 2>/dev/null || true)"; case "$last_alert" in ''|*[!0-9]*) last_alert=0 ;; esac
+notify_once() {  # KEY TEXT: one owner alert per KEY per $AUTH_REALERT_SEC (stamp $CFG/KEY-alerted, survives restarts)
+  local stamp="$CFG/$1-alerted" last_alert; last_alert="$(cat "$stamp" 2>/dev/null || true)"; case "$last_alert" in ''|*[!0-9]*) last_alert=0 ;; esac
   alert_state="alerted"
-  [ $(( $(date +%s) - last_alert )) -ge "$AUTH_REALERT_SEC" ] || return 0
-  log "ERROR: $1 (auth: $AUTH_VIA); not restarting"
-  if alert_owner "Telegram is not working: check that $AUTH_VIA is valid and channels are enabled."; then
-    date +%s > "$AUTH_STAMP"; else alert_state="alert not sent, will retry"; fi  # stamp only once the owner was told; otherwise retry next beat
+  [ $(( $(date +%s) - last_alert )) -ge "$AUTH_REALERT_SEC" ] || return 1
+  if alert_owner "$2"; then
+    date +%s > "$stamp"; else alert_state="alert not sent, will retry"; fi  # stamp only once the owner was told; otherwise retry next beat
+}
+alert_once() {  # credential and channel checks share the "auth" key
+  ! notify_once auth "Telegram is not working: check that $AUTH_VIA is valid and channels are enabled." \
+    || log "ERROR: $1 (auth: $AUTH_VIA); not restarting"
 }
 queue_age() {  # seconds a delivered message has waited with no transcript write after it, or "no"
   local inbound last
@@ -133,6 +148,19 @@ queue_age() {  # seconds a delivered message has waited with no transcript write
   last="$(find "$CFG/projects" -name '*.jsonl' -printf '%T@\n' 2>/dev/null | sort -rn | head -n1)"
   if [ "$inbound" -gt "${last%.*}" ] 2>/dev/null || { [ -z "$last" ] && [ "$inbound" -gt 0 ]; }; then
     echo "$(( $(date +%s) - inbound ))s"; else echo no; fi
+}
+last_write() { find "$CFG/projects" -name '*.jsonl' -printf '%T@\n' 2>/dev/null | sort -rn | head -n1 | cut -d. -f1; }
+reset_reason() {  # prints why the session should be reset now, or nothing. Needs: no queue, screen idle,
+  local now last since idle                    # and conversation activity since the previous reset.
+  now=$(date +%s); last="$(last_write)"; [ -n "$last" ] || return 0
+  since="$(stat -c %Y "$RESET_STAMP" 2>/dev/null || echo 0)"; [ "$last" -gt "$since" ] || return 0
+  idle=$(( now - last ))
+  if [ "${SESSION_RESET_IDLE_MIN:-0}" -gt 0 ] 2>/dev/null && [ "$idle" -ge $(( SESSION_RESET_IDLE_MIN * 60 )) ]; then
+    echo "idle $(( idle / 60 )) min"
+  elif [ -n "${SESSION_RESET_HOUR:-}" ] && [ "$(date +%-H)" = "$((10#${SESSION_RESET_HOUR}))" ] \
+       && [ "$idle" -ge 300 ] && [ $(( now - since )) -ge 3600 ]; then
+    echo "daily at ${SESSION_RESET_HOUR}h"
+  fi
 }
 started=$(date +%s); freeze=0; last_hash=""
 log "started — heartbeat every ${HEARTBEAT_SEC:-30}s"
@@ -157,6 +185,20 @@ while sleep "${HEARTBEAT_SEC:-30}"; do
     cron_msg="$(python3 "$KERNEL/bin/cron.py" tick 2>&1 || true)"
     [ -z "$cron_msg" ] || log "cron: $cron_msg"
   fi
+  backup_msg="$(python3 "$KERNEL/bin/backup.py" tick 2>&1)" || { notify_once backup "Backup failed: $backup_msg" || true; }
+  [ -z "$backup_msg" ] || log "backup: $backup_msg"
+  queue="$(queue_age)"
+  if [ "$queue" != no ] && [ "${queue%s}" -ge "${QUEUE_ALERT_SEC:-900}" ]; then
+    notify_once queue "A message has been waiting ${queue} without an answer." && log "WARN queue ${queue}: owner alerted"
+  fi
+  if [ -z "$problem" ] && [ "$queue" = no ] && ! grep -Eiq "$ACTIVE_RE" <<<"$screen"; then
+    reason="$(reset_reason)"
+    if [ -n "$reason" ]; then
+      log "session reset ($reason)"; touch "$RESET_STAMP"
+      start || { log "ERROR: claude did not start after session reset"; exit 1; }
+      started=$(date +%s); freeze=0; last_hash=""; continue
+    fi
+  fi
   if [ -n "$problem" ]; then log "heartbeat AUTH-DEAD auth=$AUTH_VIA ($problem; $alert_state, not restarting)"
-  else log "heartbeat OK freeze=$freeze/${FREEZE_CYCLES:-20} queue=$(queue_age)"; fi
+  else log "heartbeat OK freeze=$freeze/${FREEZE_CYCLES:-20} queue=$queue"; fi
 done

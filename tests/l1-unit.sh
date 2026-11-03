@@ -52,6 +52,7 @@ check "API key only: boots past auth" grep -q 'auth: ANTHROPIC_API_KEY' "$tmp/ou
 check "dead claude: exits with error" grep -q 'ERROR: claude did not start (auth: ANTHROPIC_API_KEY)' "$tmp/out"
 check "CLAUDE.md gets the agent name" grep -q "You are \*\*k-l1-$$\*\*" "$DATA_DIR/workspace/CLAUDE.md"
 check "SOUL.md seeded" grep -q "SOUL — k-l1-$$" "$DATA_DIR/workspace/SOUL.md"
+for f in USER STACK MEMORY; do check "$f.md seeded" test -s "$DATA_DIR/workspace/$f.md"; done
 check "scheduled-tasks skill seeded" test -f "$DATA_DIR/workspace/.claude/skills/scheduled-tasks/SKILL.md"
 check "owner in allowlist" grep -q '"42"' "$DATA_DIR/config/channels/telegram/access.json"
 check "bot token is not written to the volume" absent fake-bot "$(grep -r . "$DATA_DIR" 2>/dev/null)"
@@ -71,6 +72,8 @@ check "settings.json is re-imposed" grep -q 'telegram@claude-plugins-official' "
 check "advisor off when PIXAN_ADVISOR_MODEL unset" absent advisorModel "$(cat "$DATA_DIR/config/settings.json")"
 boot "${keys[@]}" STUB_CLAUDE=exit PIXAN_ADVISOR_MODEL=opus
 check "advisor on with PIXAN_ADVISOR_MODEL=opus" grep -q '"advisorModel": "opus"' "$DATA_DIR/config/settings.json"
+
+check "no tenant deny file: no extra rules" absent permissions "$(cat "$DATA_DIR/config/settings.json")"
 
 boot "${keys[@]}" STUB_CLAUDE=prompt
 check "stuck on a prompt: exits with error" grep -q 'stuck waiting for input' "$tmp/out"
@@ -152,6 +155,55 @@ wait_for 'heartbeat OK'; stop
 check "channel notice inside SERVER_GRACE_SEC: heartbeat OK" grep -q 'heartbeat OK' "$tmp/out"
 check "channel notice inside SERVER_GRACE_SEC: no alert" test ! -e "$tmp/curl"
 rm -rf "$DATA_DIR"
+
+# Session reset: a conversation idle past SESSION_RESET_IDLE_MIN starts fresh, once, without exiting.
+bake; mkdir -p "$DATA_DIR/config/projects/p"; touch -d '-10 min' "$DATA_DIR/config/projects/p/s.jsonl"
+run "${keys[@]}" SESSION_RESET_IDLE_MIN=5
+wait_for 'session reset (idle 10 min)'; sleep 3
+check "session reset: container keeps running" kill -0 "$pid"
+check "session reset: happens once, not every beat" test "$(grep -c 'session reset' "$tmp/out")" = 1
+check "session reset: new session without --continue" bash -c "tmux -L '$AGENT_NAME' capture-pane -p | grep 'stub-claude' | grep -vq -- --continue"
+check "session reset: stamp written" test -e "$DATA_DIR/config/session-reset-at"
+stop
+touch -d '-2 min' "$DATA_DIR/config/projects/p/s.jsonl"
+run "${keys[@]}" SESSION_RESET_IDLE_MIN=5
+wait_for 'heartbeat OK'; sleep 2; stop
+check "session reset: off while recently active" absent 'session reset' "$(cat "$tmp/out")"
+run "${keys[@]}"
+wait_for 'heartbeat OK'; stop
+check "session reset: off by default" absent 'session reset' "$(cat "$tmp/out")"
+rm -rf "$DATA_DIR"
+
+# Queue: a message waiting past QUEUE_ALERT_SEC alerts the owner once; it also blocks a reset.
+bake; mkdir -p "$DATA_DIR/config/projects/p" "$DATA_DIR/config/channels/telegram"
+touch -d '-30 min' "$DATA_DIR/config/projects/p/s.jsonl"; touch -d '-20 min' "$DATA_DIR/config/channels/telegram/last-inbound"
+rm -f "$tmp/curl"
+run "${keys[@]}" QUEUE_ALERT_SEC=600 SESSION_RESET_IDLE_MIN=1
+wait_for 'owner alerted'; sleep 2; stop
+check "queue: owner alerted once" test "$(grep -c 'waiting' "$tmp/curl")" = 1
+check "queue: heartbeat shows the age" grep -Eq 'queue=1[0-9]{3}s' "$tmp/out"
+check "queue: no session reset with a message waiting" absent 'session reset' "$(cat "$tmp/out")"
+rm -rf "$DATA_DIR"
+
+# Backup failure: the owner is told once, and the alert passes the secret filter.
+bake; rm -f "$tmp/curl"
+run "${keys[@]}" BACKUP_AGE_RECIPIENT="sk-ant-api03-LEAKLEAKLEAKLEAKLEAKLEAK"
+wait_for 'backup: ERROR'; sleep 2; stop
+check "backup failure: owner alerted once" test "$(grep -c 'Backup failed' "$tmp/curl")" = 1
+check "backup failure: alert redacts secrets" absent 'LEAKLEAK' "$(cat "$tmp/curl")"
+if command -v age-keygen >/dev/null; then
+  age-keygen -o "$tmp/age.key" 2>/dev/null
+  run "${keys[@]}" BACKUP_AGE_RECIPIENT="$(age-keygen -y "$tmp/age.key")"
+  wait_for 'backup: OK'; sleep 2; stop
+  check "backup: one per interval, not per beat" test "$(grep -c 'backup: OK' "$tmp/out")" = 1
+  check "backup: encrypted file on the volume" bash -c "ls '$DATA_DIR'/backups/*.tar.age"
+  check "backup: restores with the private key" bash -c "age -d -i '$tmp/age.key' '$DATA_DIR'/backups/*.tar.age | tar -t | grep -qx workspace/SOUL.md"
+else
+  echo "skip backup round-trip (age not installed)"
+fi
+rm -rf "$DATA_DIR"
+
+# Client lockdown: /opt/client/tenant-deny.json cannot be faked here (no /opt/client); L2 covers it.
 
 # Firewall resolver: stub iptables/ipset/dig/curl; DIG_FAIL names the domain that does not resolve.
 fw="$tmp/fw"; mkdir -p "$fw"

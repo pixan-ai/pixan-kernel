@@ -9,7 +9,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # hadolint ignore=DL3008
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends \
-      ca-certificates curl git python3 tmux tzdata unzip jq procps iptables ipset dnsutils aggregate \
+      ca-certificates curl git python3 tmux tzdata unzip jq procps iptables ipset dnsutils aggregate age \
  && rm -rf /var/lib/apt/lists/*
 
 ENV HOME=/home/agent \
@@ -40,9 +40,9 @@ RUN ln -s /home/agent/.bun/bin/bun /usr/local/bin/bun && bun --version
 COPY kernel/managed-settings.json /etc/claude-code/managed-settings.json
 COPY kernel/ /opt/kernel/
 RUN rm /opt/kernel/managed-settings.json \
- && chmod 0755 /opt/kernel/entrypoint.sh /opt/kernel/bin/*.py /opt/kernel/firewall/*.sh \
+ && chmod 0755 /opt/kernel/entrypoint.sh /opt/kernel/smoke.sh /opt/kernel/bin/*.py /opt/kernel/firewall/*.sh \
  && chmod 0644 /etc/claude-code/managed-settings.json \
- && { sha256sum /etc/claude-code/managed-settings.json /opt/kernel/entrypoint.sh \
+ && { sha256sum /etc/claude-code/managed-settings.json /opt/kernel/entrypoint.sh /opt/kernel/smoke.sh \
       /opt/kernel/bin/*.py /opt/kernel/firewall/*.sh \
       && find /opt/kernel/seed -type f -print0 | sort -z | xargs -0 sha256sum; } > /opt/kernel/kernel.sha256 \
  && chmod 0444 /opt/kernel/kernel.sha256
