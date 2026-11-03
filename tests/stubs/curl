@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Records Telegram alerts instead of sending them (L1 only). CURL_FAIL=1: fails like curl -f (exit 22).
+{ printf '%s\n' "$*"; cat; echo ---; } >> "${CURL_LOG:-/dev/null}"
+[ "${CURL_FAIL:-0}" != 1 ] || exit 22

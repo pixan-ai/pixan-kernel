@@ -1,0 +1,72 @@
+{
+  "skipDangerousModePermissionPrompt": true,
+  "disableClaudeAiConnectors": true,
+  "channelsEnabled": true,
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(mkfs *)",
+      "Bash(dd if=/dev/zero of=/dev/*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(/data/config/.credentials.json)",
+      "Edit(/etc/claude-code/**)",
+      "Edit(/opt/kernel/**)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "/opt/kernel/bin/clock.py"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "/opt/kernel/bin/clock.py"
+            ],
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "/opt/kernel/bin/cron.py",
+              "context"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3",
+            "args": [
+              "/opt/kernel/bin/ssrf_guard.py"
+            ],
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
