@@ -153,6 +153,27 @@ check "channel notice inside SERVER_GRACE_SEC: heartbeat OK" grep -q 'heartbeat 
 check "channel notice inside SERVER_GRACE_SEC: no alert" test ! -e "$tmp/curl"
 rm -rf "$DATA_DIR"
 
+# Firewall resolver: stub iptables/ipset/dig/curl; DIG_FAIL names the domain that does not resolve.
+fw="$tmp/fw"; mkdir -p "$fw"
+for c in iptables ip6tables ipset; do printf '#!/bin/sh\nexit 0\n' > "$fw/$c"; done
+printf '#!/bin/sh\ncat\n' > "$fw/aggregate"
+cat > "$fw/dig" <<'SH'
+#!/bin/sh
+[ "$3" = "$DIG_FAIL" ] || echo 192.0.2.1
+SH
+cat > "$fw/curl" <<'SH'
+#!/bin/sh
+case "$*" in *example.com*) exit 7 ;; *api.github.com*) echo '{"web":["192.0.2.0/24"],"api":[],"git":[]}' ;; esac
+SH
+chmod +x "$fw"/*
+fw_run() { env PATH="$fw:$PATH" DIG_FAIL="$1" bash kernel/firewall/init-firewall.sh > "$tmp/fw.out" 2>&1; }
+fw_run sentry.io; code=$?
+check "firewall: optional domain unresolvable continues" test "$code" -eq 0
+check "firewall: optional domain unresolvable WARNs" grep -q 'firewall: WARN cannot resolve sentry.io, skipped' "$tmp/fw.out"
+fw_run api.telegram.org; code=$?
+check "firewall: required domain unresolvable aborts" test "$code" -ne 0
+check "firewall: required domain unresolvable says ERROR" grep -q 'firewall: ERROR cannot resolve required api.telegram.org' "$tmp/fw.out"
+
 # Alive, then killed: the heartbeat must notice (zombie != alive).
 bake; env "${keys[@]}" ./kernel/entrypoint.sh > "$tmp/out" 2>&1 & pid=$!
 for _ in $(seq 1 20); do grep -q 'heartbeat OK' "$tmp/out" && break; sleep 0.5; done

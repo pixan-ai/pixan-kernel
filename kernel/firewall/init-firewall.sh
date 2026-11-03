@@ -7,7 +7,9 @@
 set -euo pipefail
 IFS=$'\n\t'
 # registry.npmjs.org: `bun install` of the Telegram plugin's dependencies.
-domains=(api.anthropic.com statsig.anthropic.com sentry.io api.telegram.org registry.npmjs.org)
+# Required: without them the agent cannot work, so failing to resolve them aborts. The rest only WARN.
+required=(api.anthropic.com api.telegram.org)
+domains=("${required[@]}" sentry.io registry.npmjs.org)
 # The lists are space separated: split them on spaces explicitly (IFS above has no space).
 IFS=' ' read -r -a extra <<<"${KERNEL_EGRESS_ALLOW:-}" || true
 IFS=' ' read -r -a cidrs <<<"${KERNEL_EGRESS_ALLOW_CIDR:-}" || true
@@ -25,7 +27,10 @@ done
 for d in "${domains[@]}"; do
   [ -n "$d" ] || continue
   ips="$(dig +short A "$d" | grep -E '^[0-9.]+$' || true)"
-  [ -n "$ips" ] || { echo "firewall: cannot resolve $d" >&2; exit 1; }
+  if [ -z "$ips" ]; then
+    for r in "${required[@]}"; do [ "$d" != "$r" ] || { echo "firewall: ERROR cannot resolve required $d" >&2; exit 1; }; done
+    echo "firewall: WARN cannot resolve $d, skipped" >&2; continue
+  fi
   while read -r ip; do ipset add allowed-domains "$ip" -exist; done <<<"$ips"
 done
 
