@@ -40,7 +40,9 @@ For each case below:
 
 1. Boot and check the log shows the expected `auth:` line and no credential value.
 2. Telegram: send the bot a message and get a reply.
-3. Cron: `docker exec -u agent lab python3 /opt/kernel/bin/cron.py add --id lab-auth-check --at "<now + 2 min>" --chat-id <your chat> --created-by lab --prompt "Say: lab auth ok"`.
+3. Cron: `--at` is the container's local time as `YYYY-MM-DD HH:MM`:
+   `AT=$(docker exec lab date -d '+2 min' '+%Y-%m-%d %H:%M')`, then
+   `docker exec -u agent lab python3 /opt/kernel/bin/cron.py add --id lab-auth-check --at "$AT" --chat-id <your chat> --created-by lab --prompt "Say: lab auth ok"`.
    Within ~3 min the message arrives in Telegram; `cron.py list` shows `delivered`.
 4. Check billing/usage shows the activity on the expected account (Console usage or claude.ai usage).
 5. `grep -r` the volume for the token/key: only the last 20 characters of an API key may appear, in `.claude.json`.
@@ -63,7 +65,7 @@ For each case below:
 
 **Case 2 must settle one open question.** Earlier tests with a token showed
 `--channels ignored ... Channels are not currently available` on screen. Was that caused by a fake/invalid
-token? Run case 2 with a **real, valid** token from `claude setup-token`:
+token? Run case 2 with a **real, valid** token from `docker run --rm -it --entrypoint claude pixan-lab-client:lab setup-token`:
 
 - ☐ Valid token: the message does **not** appear and Telegram replies → it was the fake token.
 - ☐ Valid token: the message **still** appears → channels are not available with that token/plan
