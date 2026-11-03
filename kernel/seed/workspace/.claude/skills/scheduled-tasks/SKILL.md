@@ -1,6 +1,6 @@
 ---
 name: scheduled-tasks
-description: Schedule work that repeats or runs at a given time ("follow up on the order every day", "send me the summary every Monday at 8", "remind me tomorrow at 10"). You DO have persistent cron; use it instead of CronCreate, which dies with your session.
+description: Schedule work that repeats or runs at a given time ("follow up on the order every day", "send me the summary every Monday at 8", "remind me tomorrow at 10"). You DO have persistent cron; use it instead of CronCreate, which is disabled here (natively it expires after 7 days and can run up to 30 min late).
 ---
 
 # Scheduled tasks

@@ -18,6 +18,7 @@ ENV HOME=/home/agent \
     TZ=America/Mexico_City \
     DISABLE_AUTOUPDATER=1 \
     DISABLE_UPDATES=1 \
+    CLAUDE_CODE_DISABLE_CRON=1 \
     CLAUDE_CONFIG_DIR=/data/config \
     TELEGRAM_STATE_DIR=/data/config/channels/telegram \
     AGENT_WORKSPACE=/data/workspace

@@ -13,6 +13,7 @@ check "base image has no claude" docker run --rm --entrypoint bash "$base" -c '!
 check "test client image builds" docker build -q -t "$img" --build-arg BASE="$base" -f tests/stubs/Dockerfile tests/stubs
 check "kernel python compiles on the image's python3" docker run --rm --entrypoint bash "$base" -c 'python3 -m py_compile /opt/kernel/bin/*.py'
 check "cron.py list runs on the image" docker run --rm --entrypoint python3 -e CLAUDE_CONFIG_DIR=/tmp "$base" /opt/kernel/bin/cron.py list
+check "native cron disabled (CLAUDE_CODE_DISABLE_CRON=1)" test "$(docker run --rm --entrypoint printenv "$base" CLAUDE_CODE_DISABLE_CRON)" = 1
 check "LANG is C.UTF-8" test "$(docker run --rm --entrypoint printenv "$base" LANG)" = C.UTF-8
 check "PATH has no agent-writable dirs" absent '/home/agent' "$(docker run --rm --entrypoint printenv "$base" PATH)"
 # shellcheck disable=SC2016

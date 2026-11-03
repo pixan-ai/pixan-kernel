@@ -211,14 +211,14 @@ class TestSendRichMessage(unittest.TestCase):
         self.assertEqual(self._run("--markdown-file", str(md)), 0)
         self.assertEqual(self.calls[0][0], "sendRichMessage")
 
-    def test_text_sigue_usando_send_message(self):
-        self.assertEqual(self._run("--text", "<b>hola</b>"), 0)
+    def test_text_still_uses_send_message(self):
+        self.assertEqual(self._run("--text", "<b>hello</b>"), 0)
         method, data, files, multipart = self.calls[0]
         self.assertEqual(method, "sendMessage")
         self.assertEqual(data["parse_mode"], "HTML")
         self.assertFalse(multipart)
 
-    def test_sin_token_exit_2(self):
+    def test_no_token_exit_2(self):
         self.assertEqual(self._run("--markdown", "x", token=""), 2)
         self.assertEqual(self.calls, [])
 
@@ -267,12 +267,12 @@ class TestDestinatarioPermitido(unittest.TestCase):
                 self.sr.assert_chat_allowed("999999")
         self.assertIn("is not in the access list", str(e.exception))
 
-    def test_sin_access_json_no_manda_a_ciegas(self):
+    def test_no_access_json_does_not_send_blind(self):
         with unittest.mock.patch.dict(os.environ, {"TELEGRAM_STATE_DIR": "/no/existe"}):
             with self.assertRaises(SystemExit):
                 self.sr.assert_chat_allowed("123456789")
 
-    def test_el_cli_corta_con_exit_2(self):
+    def test_cli_stops_with_exit_2(self):
         env = {**os.environ, **self.env, "TELEGRAM_BOT_TOKEN": "t"}
         r = subprocess.run([sys.executable, str(SCRIPTS / "send_rich.py"),
                             "--chat-id", "999999", "--markdown", "x"],

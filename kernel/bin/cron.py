@@ -15,7 +15,7 @@ session may be mid-conversation with a client, and a scheduled job must neither
 interrupt it nor freeze it. The job runs with its own CLAUDE_CONFIG_DIR with
 empty user settings (no Telegram plugin; managed settings still apply), so it never competes with the live session
 for Telegram updates. The runner, not the model, delivers the final answer.
-Not CronCreate: it lives inside the session and dies with it.
+Not CronCreate: it is session-scoped (restored on --resume, but expires after 7 days and may run up to 30 min late).
 
 Exit 0 ok, 1 the run failed, 2 invalid input, 3 unknown task
 """
