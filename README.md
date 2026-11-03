@@ -70,7 +70,7 @@ tests/                         L0 static+unit · L1 entrypoint · L2 image smoke
 The kernel is Claude Code set up well for a 24/7 agent. Each extra piece covers a gap in Claude Code
 alone (checked against the official docs: scheduled tasks, sandboxing, settings). Nothing here is a
 security product; the software is provided AS IS under the Apache-2.0 license.
-For clients, in Spanish: [`docs/what-it-does.md`](docs/what-it-does.md).
+For clients: [`docs/what-it-does.md`](docs/what-it-does.md).
 
 | Piece | Why Claude Code alone doesn't cover it | Optional? |
 |---|---|---|

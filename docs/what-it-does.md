@@ -1,26 +1,26 @@
-# Qué hace el kernel (y qué no)
+# What the kernel does (and what it doesn't)
 
-El kernel es **Claude Code bien configurado para trabajar como agente 24/7**, hablando contigo por el plugin oficial de Telegram. Está hecho con piezas oficiales: Claude Code, el plugin de Telegram de Anthropic e instrucciones en texto (`.md`).
+The kernel is **Claude Code set up well to work as a 24/7 agent**, talking to you through the official Telegram plugin. It is built from official pieces: Claude Code, Anthropic's Telegram plugin, and plain-text instructions (`.md`).
 
-## Qué agrega
+## What it adds
 
-- **Tareas programadas que no caducan** (`cron.py`): corren a su hora, sobreviven reinicios y te entregan el resultado por Telegram. Las tareas nativas de Claude Code caducan a los 7 días y pueden llegar hasta 30 min tarde, por eso aquí están desactivadas.
-- **La hora exacta** (`clock.py`): Claude Code solo le da al agente la fecha.
-- **Latido**: revisa cada 30 s que el agente siga vivo; si no, el contenedor se reinicia.
-- **Mensajes enriquecidos**: tablas, imágenes y HTML en Telegram. Si no se pueden activar, Telegram sigue funcionando normal.
-- **Reglas de seguridad básicas**: reglas oficiales de Claude Code (managed settings) y una revisión que evita que el agente abra direcciones de la red interna. Son una red de protección extra, no una garantía.
-- **Lista de salida a internet (opcional, apagada)**: si tú la activas (`KERNEL_FIREWALL=1`), el agente solo puede conectarse a los sitios de la lista. Viene **apagada** por defecto.
+- **Scheduled tasks that don't expire** (`cron.py`): they run on time, survive restarts, and deliver the result to you on Telegram. Claude Code's native tasks expire after 7 days and can start up to 30 min late, so they are turned off here.
+- **The exact time** (`clock.py`): Claude Code only gives the agent the date.
+- **Heartbeat**: checks every 30 s that the agent is still alive; if not, the container restarts.
+- **Rich messages**: tables, images, and HTML in Telegram. If they can't be turned on, Telegram keeps working normally.
+- **Basic safety rules**: official Claude Code rules (managed settings) and a check that stops the agent from opening internal network addresses. They are an extra safety net, not a guarantee.
+- **Outbound internet allowlist (optional, off)**: if you turn it on (`KERNEL_FIREWALL=1`), the agent can only connect to the sites on the list. It is **off** by default.
 
-## Qué NO promete
+## What it does NOT promise
 
-- **No es un producto de seguridad.** Nada de lo que hay aquí garantiza que el agente no se equivoque, no sea engañado o no cause daños.
-- **No garantiza disponibilidad** ni que funcione sin errores con cada versión nueva de Claude Code o de Telegram.
-- **No reemplaza tus respaldos** ni tu revisión de lo que el agente hace en tus sistemas.
+- **It is not a security product.** Nothing here guarantees that the agent won't make mistakes, be tricked, or cause harm.
+- **It does not guarantee availability**, or that it works without errors with every new version of Claude Code or Telegram.
+- **It does not replace your backups** or your review of what the agent does in your systems.
 
-## Cómo actúa el agente
+## How the agent acts
 
-El agente corre con `--dangerously-skip-permissions`: **actúa sin pedirte permiso** en cada paso. Esto es **decisión tuya** como cliente, para que pueda trabajar solo las 24 horas. Por eso te recomendamos darle acceso de solo lectura a tus sistemas hasta que decidas lo contrario, y usar claves con permisos limitados.
+The agent runs with `--dangerously-skip-permissions`: **it acts without asking you** at each step. This is **your decision** as the client, so it can work on its own 24 hours a day. That is why we recommend giving it read-only access to your systems until you decide otherwise, and using keys with limited permissions.
 
-## Licencia
+## License
 
-El software se entrega **"TAL CUAL" (AS IS)**, sin garantías de ningún tipo, bajo la licencia **Apache 2.0** (ver [`LICENSE`](../LICENSE)).
+The software is provided **"AS IS"**, without warranties of any kind, under the **Apache 2.0** license (see [`LICENSE`](../LICENSE)).
