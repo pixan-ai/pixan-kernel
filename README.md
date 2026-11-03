@@ -4,7 +4,7 @@ A lean, client-agnostic kernel for running **Claude Code as an always-on agent i
 talking to people through the official Claude Code **Telegram plugin**. The same image runs on
 **Railway** or on a **Windows laptop** (WSL2 + Docker Desktop).
 
-The kernel gives every agent the same boring, tested foundation — boot, guards, heartbeat,
+The kernel gives every agent the same boring, tested foundation — boot, safety rules, heartbeat,
 scheduled tasks, rich messages — so each client repo only adds what makes it unique: its soul,
 identity and skills.
 
@@ -16,8 +16,8 @@ identity and skills.
 flowchart TB
   subgraph Host["Host: Railway service or Windows laptop (WSL2 + Docker Desktop)"]
     subgraph C["Container (client image FROM pixan-kernel)"]
-      EP["entrypoint.sh (root → agent)"] --> G["guard check<br/>sha256 manifest"]
-      EP --> FW["optional egress firewall"]
+      EP["entrypoint.sh (root → agent)"] --> G["integrity check<br/>sha256 manifest"]
+      EP --> FW["optional outbound allowlist (off)"]
       EP --> T["tmux: claude --channels plugin:telegram"]
       EP --> HB["heartbeat loop<br/>pane alive? + cron tick"]
       HB --> CR["cron.py → separate claude -p"]
@@ -35,7 +35,7 @@ flowchart TB
 
 | Layer | Lives in | Contains |
 |---|---|---|
-| **Kernel** (this repo, public) | `ghcr.io/pixan-ai/pixan-kernel` | Debian base, non-root `agent` user, Bun, entrypoint, heartbeat, `cron.py`, `send_rich.py`, `patch_rich_message.py`, `ssrf_guard.py`, `clock.py`, managed settings, firewall. **No Claude Code.** |
+| **Kernel** (this repo, public) | `ghcr.io/pixan-ai/pixan-kernel` | Debian base, non-root `agent` user, Bun, entrypoint, heartbeat, `cron.py`, `send_rich.py`, `patch_rich_message.py`, `ssrf_guard.py`, `clock.py`, managed settings, optional outbound allowlist. **No Claude Code.** |
 | **Client** (private repo per client) | `FROM ghcr.io/pixan-ai/pixan-kernel@sha256:…` | Pinned Claude Code, `SOUL.md`, `IDENTITY.md`, skills, client config. See [`examples/client/`](examples/client/). |
 | **Runtime data** | `/data` volume | `CLAUDE_CONFIG_DIR=/data/config`, workspace, memory, scheduled tasks, Telegram access list. |
 
@@ -44,7 +44,7 @@ a pinned version in its own build, and updates ship as new, tested images (`DISA
 
 ```
 Dockerfile                     kernel base image
-kernel/entrypoint.sh           boot → guards → auth → seed → tmux → heartbeat
+kernel/entrypoint.sh           boot → integrity check → auth → seed → tmux → heartbeat
 kernel/managed-settings.json   deny rules + hooks (installed root-owned in /etc/claude-code)
 kernel/bin/                    cron, send_rich, patch_rich_message, ssrf_guard, clock
 kernel/seed/                   user settings (plugins), access.json, CLAUDE/SOUL/IDENTITY, skills
@@ -62,8 +62,24 @@ tests/                         L0 static+unit · L1 entrypoint · L2 image smoke
 - **Scheduled tasks** (`cron.py` + `scheduled-tasks` skill): survive restarts, run in a separate
   `claude -p` so they never freeze the live chat, at most one per beat, no flooding.
 - **Rich messages** (`send_rich.py`, `patch_rich_message.py`): HTML, tables, images to allowed chats only.
-- **SSRF guard** on `WebFetch` (blocks private/loopback/metadata addresses).
+- **Safety rules** on `WebFetch`: a hook that refuses private, loopback and cloud-metadata addresses. An extra safety net, not a guarantee.
 - **Advisor tool** (optional, off by default) — see below.
+
+## Why each piece exists
+
+The kernel is Claude Code set up well for a 24/7 agent. Each extra piece covers a gap in Claude Code
+alone (checked against the official docs: scheduled tasks, sandboxing, settings). Nothing here is a
+security product; the software is provided AS IS under the Apache-2.0 license.
+For clients, in Spanish: [`docs/what-it-does.md`](docs/what-it-does.md).
+
+| Piece | Why Claude Code alone doesn't cover it | Optional? |
+|---|---|---|
+| `cron.py` | Native `CronCreate` / `/loop` recurring tasks expire after 7 days, start up to 30 min late (jitter), fire only while the session is open and idle, and don't catch up missed runs. They are restored on `--resume`, but expired ones are not. Cloud routines can't see local files or the agent's Telegram; Desktop scheduled tasks need the desktop app. `cron.py` has no expiry, runs on time in a separate `claude -p`, survives restarts and delivers to Telegram. The image sets `CLAUDE_CODE_DISABLE_CRON=1` so the agent can't fall back to the native scheduler. | No |
+| `clock.py` | Claude Code gives the agent the date, not the time. 23 lines. | No |
+| `ssrf_guard.py` | With `--dangerously-skip-permissions` there are no `WebFetch` prompts, and we found no native block of private or metadata addresses. An extra safety net, not a guarantee. | No |
+| `init-firewall.sh` | The native sandbox covers only shell commands (not `WebFetch`, MCP servers or hooks), needs `enableWeakerNestedSandbox` inside Docker, and in bypass mode allows hosts outside the list unless `strictAllowlist` or `allowManagedDomainsOnly` is set. Ours follows Anthropic's reference devcontainer `init-firewall.sh`. | Yes, off by default (`KERNEL_FIREWALL=0`); the client opts in |
+| `managed-settings.json` | Not a gap: it is the official Claude Code managed-settings feature (deny rules, hooks, `channelsEnabled`), used as intended. | No |
+| Hash manifest | Detects a client layer that modified kernel files (catches mistakes). Internal. | No (internal) |
 
 ## Install
 
@@ -96,7 +112,7 @@ See [`deploy/windows/README.md`](deploy/windows/README.md). In short:
 | `TELEGRAM_BOT_TOKEN`, `OWNER_TELEGRAM_ID` | yes | Bot token and the owner's numeric Telegram ID. |
 | `AGENT_NAME`, `AGENT_LANGUAGE` | no | Defaults `agent`, `English`. |
 | `TZ` | no | Default `America/Mexico_City`. |
-| `KERNEL_FIREWALL`, `KERNEL_EGRESS_ALLOW`, `KERNEL_EGRESS_ALLOW_CIDR` | no | Optional egress allowlist. |
+| `KERNEL_FIREWALL`, `KERNEL_EGRESS_ALLOW`, `KERNEL_EGRESS_ALLOW_CIDR` | no | Optional outbound allowlist, off by default (`KERNEL_FIREWALL=0`). |
 | `KERNEL_CRON` | no | `0` disables scheduled tasks. |
 | `PIXAN_ADVISOR_MODEL` | no | Unset = advisor off. `opus`, `sonnet` or a full model id. |
 
@@ -139,13 +155,13 @@ Based on Anthropic's [Development containers](https://docs.anthropic.com/en/docs
 - **Container isolation.** "commands Claude runs execute inside it rather than on the host machine".
 - **Non-root.** "Because the container runs Claude Code as a non-root user and confines command execution to
   the container, you can pass `--dangerously-skip-permissions` for unattended operation." The entrypoint starts
-  as root only to verify guards, set up the firewall and fix volume ownership, then drops to `agent` (uid 1000).
+  as root only to verify kernel files, set up the optional firewall (if enabled) and fix volume ownership, then drops to `agent` (uid 1000).
 - **Managed settings** at `/etc/claude-code/managed-settings.json` (root-owned, highest precedence): deny rules
   (destructive commands, `.env`, credentials, editing kernel files) and hooks
-  (clock, SSRF guard, cron context). Clients add rules in their own user/project settings; they cannot loosen these.
-- **Boot guard check.** A sha256 manifest of the kernel files is built into the image; if a client layer
-  overwrites a guard, the container refuses to start. (This catches mistakes, not a hostile image builder.)
-- **Optional egress firewall** following the reference `init-firewall.sh` pattern ("limits outbound traffic"):
+  (clock, private-address check, cron context). Clients add rules in their own user/project settings; they cannot loosen these.
+- **Boot integrity check.** A sha256 manifest of the kernel files is built into the image; if a client layer
+  overwrites a kernel file, the container refuses to start. (This catches mistakes, not a hostile image builder.)
+- **Optional outbound allowlist, off by default** (`KERNEL_FIREWALL=0`), following the reference `init-firewall.sh` pattern ("limits outbound traffic"):
   default deny, allow DNS, Anthropic, Telegram, GitHub and any extra hosts you list. Needs `NET_ADMIN`.
 - **Secrets**: never baked into images; the bot token file is `0600`; don't mount host `~/.ssh` — use
   scoped, short-lived tokens, as the same page recommends.
@@ -170,9 +186,9 @@ model id) and the kernel writes `advisorModel` into the user settings at boot (t
 
 | Level | Runs | Proves |
 |---|---|---|
-| L0 `tests/l0-static.sh` | shellcheck, hadolint, JSON/YAML/TOML, Python unit tests, gitleaks | files are sane; cron, guards, rich messages behave; base image has no Claude Code; advisor off when unset |
+| L0 `tests/l0-static.sh` | shellcheck, hadolint, JSON/YAML/TOML, Python unit tests, gitleaks | files are sane; cron, safety rules, rich messages behave; base image has no Claude Code; advisor off when unset |
 | L1 `tests/l1-unit.sh` | entrypoint with a stub `claude` | auth from `claude auth status` (OAuth, key, both, cloud), missing credential and missing baked plugin fail fast, no token in the pane env, boot order, seeding rules, setup-screen detection; heartbeat: zombie, hung Claude, no `bun server.ts`, dropped channel → exit 1; dead credential → one owner alert, no restart |
-| L2 `tests/l2-docker.sh` | real image + stub client layer, `--network none` | image builds, guards are `root:644`, tampered guard refuses boot, baked plugin copied to `/data`, killed Claude → container exits 1 |
+| L2 `tests/l2-docker.sh` | real image + stub client layer, `--network none` | image builds, kernel files are `root:644`, a modified kernel file refuses boot, baked plugin copied to `/data`, killed Claude → container exits 1 |
 
 CI runs all three on every PR; pushes to `main` also publish `ghcr.io/pixan-ai/pixan-kernel`.
 
