@@ -89,8 +89,9 @@ tests/                         L0 static+unit · L1 entrypoint · L2 image smoke
 - **Client lockdown**: a client image can ship `/opt/client/tenant-deny.json` (`{"deny": ["Bash(curl *)", …]}`);
   the rules are added to the agent's settings at boot. It can only take permissions away.
 - **SSRF guard** on `WebFetch`, now complete: private, loopback, link-local, CGNAT, multicast, metadata names,
-  `.internal`/`.local`, IPv4 hidden in IPv6 (mapped, 6to4, Teredo, NAT64), and a second DNS lookup to catch rebinding.
-- **`/start`** answers "Hello World, I am a Pixan agent." (patched into the plugin at boot).
+  `.internal`/`.local`, IPv4 hidden in IPv6 (mapped, 6to4, Teredo, NAT64), and a second DNS lookup: every address from both lookups must be public (narrows DNS rebinding).
+- **`/start`** answers "Hello World, I am a Pixan agent." (patched into the plugin at boot); set `START_TEXT`
+  to change it, e.g. in the agent's language.
 - **Numbered options**: `CLAUDE.md` tells the agent to give numbered options when the owner must decide.
 - **`smoke.sh`**: `docker exec <container> /opt/kernel/smoke.sh` checks a running agent (guards, session,
   workspace, imports, last backup).
@@ -151,6 +152,7 @@ See [`deploy/windows/README.md`](deploy/windows/README.md). In short:
 | `BACKUP_DIR`, `BACKUP_INTERVAL_SEC`, `BACKUP_KEEP` | no | Defaults `/data/backups`, `3600`, `48`. The Windows compose maps `./backups` to `/backups`. |
 | `BACKUP_R2_ENDPOINT`, `BACKUP_R2_BUCKET`, `BACKUP_R2_ACCESS_KEY_ID`, `BACKUP_R2_SECRET_ACCESS_KEY` | no | Optional R2 copy; all four or none. Use a token scoped to that one bucket. |
 | `SESSION_RESET_IDLE_MIN`, `SESSION_RESET_HOUR` | no | Fresh session after N idle minutes (`0` = off, default) and/or daily at this hour (0-23, unset = off). |
+| `START_TEXT` | no | Reply to `/start`. Default `Hello World, I am a Pixan agent.` |
 | `QUEUE_ALERT_SEC` | no | Alert the owner when a message waits this long. Default `900`. |
 
 ## Auth model
@@ -203,6 +205,11 @@ Based on Anthropic's [Development containers](https://docs.anthropic.com/en/docs
   Host names are resolved **once, at boot**: if a provider moves to new IPs, restart the container.
 - **Secrets**: never baked into images; the bot token file is `0600`; don't mount host `~/.ssh` — use
   scoped, short-lived tokens, as the same page recommends.
+- **Telegram access is owner-managed.** The agent cannot edit `/data/config/channels/**` (including
+  `access.json`), so a chat message can never talk it into adding people. The owner is allowed from
+  `OWNER_TELEGRAM_ID` at first boot; to change who may talk to the bot, the owner edits `access.json` on the
+  volume (e.g. `docker exec -u agent <container> vi /data/config/channels/telegram/access.json`). The plugin's
+  `/telegram:access` pairing skill is meant for a person at the terminal, which an always-on agent has not.
 - **Limits of deny rules.** `Read`/`Edit` deny rules stop Claude's own file tools, not every program it runs:
   a shell command can still read or write those paths. Files that must not change are root-owned
   (kernel, managed settings); owner files on the volume are protected from casual edits only. Backups and

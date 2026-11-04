@@ -3,8 +3,9 @@
 
 Only http(s) to hosts whose every address is global unicast. Refuses:
 private, loopback, link-local, CGNAT, multicast, reserved, unspecified;
-IPv4 hidden inside IPv6 (mapped, 6to4, Teredo, NAT64); cloud metadata names;
-and hosts that answer differently on a second lookup (DNS rebinding).
+IPv4 hidden inside IPv6 (mapped, 6to4, Teredo, NAT64); cloud metadata names.
+The host is resolved twice and every address from both lookups (the union) must
+be public, which catches a DNS-rebinding answer that flips between the two.
 Limits: WebFetch resolves again on its own and may follow redirects; this
 narrows the window, it does not close it. An extra safety net, not a guarantee.
 """

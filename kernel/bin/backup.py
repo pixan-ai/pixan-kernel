@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from secret_filter import redact  # noqa: E402
 
 DEFAULTS = {"BACKUP_INTERVAL_SEC": 3600, "BACKUP_KEEP": 48}
-MAX_TEXT = 5 * 1024 * 1024   # bigger files are copied only if they have no secret shape at all
+MAX_SCAN = 5 * 1024 * 1024   # binary files are scanned for secrets up to this size; bigger ones are left out
 # Relative to /data. Directories are walked; missing ones are skipped.
 INCLUDE = ["workspace", "config/projects", "config/cron.json", "config/channels/telegram/access.json"]
 EXCLUDE = [".credentials.json", ".claude.json*", ".env", ".env.*", "*.pem", "*.key", "id_rsa*",
@@ -84,7 +84,7 @@ def files() -> list[Path]:
 
 def build_tar() -> tuple[bytes, int, int]:
     """Plain tar (in memory) of every file, secrets redacted. Returns (bytes, files, redactions)."""
-    buf, n_files, n_redacted = io.BytesIO(), 0, 0
+    buf, n_files, n_redacted, n_skipped = io.BytesIO(), 0, 0, 0
     root = data_dir()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         for path in files():
@@ -100,13 +100,18 @@ def build_tar() -> tuple[bytes, int, int]:
                 clean, n = redact(text)
                 if n:
                     raw, n_redacted = clean.encode("utf-8"), n_redacted + n
-            elif len(raw) <= MAX_TEXT and redact(raw.decode("latin-1"))[1]:
+            elif len(raw) > MAX_SCAN:
+                n_skipped += 1
+                continue  # binary too big to scan: leave it out rather than copy it unchecked
+            elif redact(raw.decode("latin-1"))[1]:
                 n_redacted += 1
                 continue  # binary file with a secret shape inside: leave it out
             info = tarfile.TarInfo(str(path.relative_to(root)))
             info.size, info.mtime, info.mode = len(raw), int(path.stat().st_mtime), 0o600
             tar.addfile(info, io.BytesIO(raw))
             n_files += 1
+    if n_skipped:
+        print(f"WARN left out {n_skipped} binary file(s) over {MAX_SCAN // (1024 * 1024)} MB (too big to scan)", file=sys.stderr)
     return buf.getvalue(), n_files, n_redacted
 
 
@@ -122,6 +127,10 @@ def encrypt(plain: bytes, out: Path, recipient: str, runner=subprocess.run) -> N
 def prune(folder: Path, keep: int) -> None:
     for old in sorted(folder.glob("*.tar.age"))[:-keep] if keep > 0 else []:
         old.unlink(missing_ok=True)
+
+
+class R2Error(RuntimeError):
+    """The local copy succeeded; only the R2 copy failed."""
 
 
 def r2_settings() -> dict | None:
@@ -151,14 +160,19 @@ def backup(now: float | None = None, runner=subprocess.run) -> str:
     out = folder / name
     encrypt(plain, out, recipient, runner)
     prune(folder, _int("BACKUP_KEEP"))
-    where = "local"
-    cfg = r2_settings()
-    if cfg:
-        upload_r2(out, cfg, runner)
-        where = "local + R2"
+    # Stamp as soon as the local copy exists: a failing R2 must not trigger a new backup
+    # (and a prune) on every heartbeat. R2 is retried with the next scheduled backup.
     stamp_path().parent.mkdir(parents=True, exist_ok=True)
     stamp_path().write_text(str(int(now)), encoding="utf-8")
-    return f"OK {name} ({n_files} files, {n_redacted} secrets redacted, {where})"
+    msg = f"{name} ({n_files} files, {n_redacted} secrets redacted"
+    cfg = r2_settings()
+    if cfg:
+        try:
+            upload_r2(out, cfg, runner)
+        except RuntimeError as e:
+            raise R2Error(f"local copy OK {msg}); {e}") from e
+        return f"OK {msg}, local + R2)"
+    return f"OK {msg}, local)"
 
 
 def due(now: float) -> bool:

@@ -95,6 +95,17 @@ class TestContents(Base):
         self.assertEqual(seen["cmd"][-1], "https://e/b/t/t-1.tar.age")
 
 
+class TestLargeBinary(Base):
+    def test_unscannable_binary_left_out(self):
+        big = os.path.join(self.data, "workspace", "big.bin")
+        with open(big, "wb") as f:
+            f.write(b"\xff" * (backup.MAX_SCAN + 1024 * 1024) + SECRET.encode())
+        raw, _, _ = backup.build_tar()
+        with tarfile.open(fileobj=io.BytesIO(raw)) as t:
+            self.assertNotIn("workspace/big.bin", t.getnames())
+        self.assertNotIn(SECRET.encode(), raw)
+
+
 @unittest.skipUnless(HAS_AGE, "age not installed")
 class TestEncrypted(Base):
     def test_roundtrip_and_prune(self):
@@ -113,6 +124,29 @@ class TestEncrypted(Base):
         with tarfile.open(fileobj=io.BytesIO(plain)) as t:
             self.assertEqual(t.extractfile("workspace/SOUL.md").read(), b"soul\n")
         self.assertFalse(backup.due(1_700_000_002 + 10))
+
+    def test_r2_failure_no_retry_storm(self):
+        key = os.path.join(self.tmp, "key.txt")
+        subprocess.run(["age-keygen", "-o", key], check=True, capture_output=True)
+        pub = subprocess.run(["age-keygen", "-y", key], check=True, capture_output=True, text=True).stdout.strip()
+        os.environ.update(BACKUP_AGE_RECIPIENT=pub, BACKUP_KEEP="3", BACKUP_R2_ENDPOINT="https://e",
+                          BACKUP_R2_BUCKET="b", BACKUP_R2_ACCESS_KEY_ID="id", BACKUP_R2_SECRET_ACCESS_KEY="sec")
+
+        def runner(cmd, input=None, capture_output=None):
+            if cmd[0] == "curl":
+                return subprocess.CompletedProcess(cmd, 6, b"", b"")
+            return subprocess.run(cmd, input=input, capture_output=True)
+        folder = os.path.join(self.data, "backups")
+        os.makedirs(folder, exist_ok=True)
+        for old in ("t-20000101-000000.tar.age", "t-20000101-010000.tar.age"):
+            open(os.path.join(folder, old), "w").close()
+        now = 1_700_000_000
+        with self.assertRaises(backup.R2Error):
+            backup.backup(now=now, runner=runner)
+        self.assertFalse(backup.due(now + 30))  # next heartbeat: no new backup
+        kept = sorted(f for f in os.listdir(folder) if f.startswith("t-"))
+        self.assertEqual(len(kept), 3)
+        self.assertIn("t-20000101-000000.tar.age", kept)
 
     def test_bad_recipient_fails_cleanly(self):
         os.environ["BACKUP_AGE_RECIPIENT"] = "not-a-key"

@@ -7,7 +7,9 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "kernel", "bin"))
-from patch_rich_message import START_TEXT, patch_start  # noqa: E402
+from unittest import mock
+
+from patch_rich_message import DEFAULT_START_TEXT as START_TEXT, patch_start  # noqa: E402
 
 SERVER = """bot.command('start', async ctx => {
   if (!dmCommandGate(ctx)) return
@@ -48,6 +50,14 @@ class TestStartPatch(unittest.TestCase):
         once = self.read()
         self.assertEqual(patch_start(self.path), "already")
         self.assertEqual(self.read(), once)
+
+    def test_env_override_and_change(self):
+        patch_start(self.path)
+        with mock.patch.dict(os.environ, {"START_TEXT": "Hola, soy un agente Pixan."}):
+            self.assertEqual(patch_start(self.path), "patched")
+        src = self.read()
+        self.assertIn("Hola, soy un agente Pixan.", src)
+        self.assertNotIn(START_TEXT, src)
 
     def test_no_anchor_and_missing(self):
         with open(self.path, "w") as f:

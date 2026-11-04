@@ -105,15 +105,16 @@ def patch_stamp(path):
     return _insert(path, STAMP_ANCHOR, STAMP_MARK, STAMP_PATCH, "stamp")
 
 
-START_TEXT = "Hello World, I am a Pixan agent."
+DEFAULT_START_TEXT = "Hello World, I am a Pixan agent."
 # The plugin's /start handler: `await ctx.reply(<pairing instructions>)`. The agent is
 # already paired with its owner by the kernel, so those instructions would only confuse.
 START_RE = re.compile(r"(bot\.command\('start', async ctx => \{\n\s*if \(!dmCommandGate\(ctx\)\) return\n"
                       r"\s*await ctx\.reply\()(.*?)(\)\n\}\))", re.S)
 
 
-def patch_start(path):
-    """/start answers START_TEXT. Returns patched/already/no-anchor/missing."""
+def patch_start(path, text=None):
+    """/start answers `text` (default: env START_TEXT, else DEFAULT_START_TEXT).
+    Returns patched/already/no-anchor/missing."""
     if not os.path.exists(path):
         return "missing"
     with open(path, encoding="utf-8") as f:
@@ -121,7 +122,7 @@ def patch_start(path):
     m = START_RE.search(src)
     if not m:
         return "no-anchor"
-    new = json.dumps(START_TEXT)
+    new = json.dumps(text or os.environ.get("START_TEXT", "").strip() or DEFAULT_START_TEXT)
     if m.group(2).strip() == new:
         return "already"
     shutil.copy2(path, "%s.bak-%s-prestart" % (path, datetime.now().strftime("%Y%m%d-%H%M%S")))
