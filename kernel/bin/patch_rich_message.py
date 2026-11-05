@@ -15,11 +15,16 @@ heartbeat compares it with the transcript: if a message came in and the session
 wrote nothing afterwards, it is really queued. Reading the screen does not
 work, because the `← telegram ·` marker stays painted after it was handled.
 
+Third patch: `/start` answers "Hello World, I am a Pixan agent." instead of the
+plugin's pairing instructions (the kernel already paired the owner).
+
 Idempotent: each patch recognizes its own mark and never inserts twice.
 """
 
 import glob
+import json
 import os
+import re
 import shutil
 import sys
 from datetime import datetime
@@ -100,10 +105,36 @@ def patch_stamp(path):
     return _insert(path, STAMP_ANCHOR, STAMP_MARK, STAMP_PATCH, "stamp")
 
 
+DEFAULT_START_TEXT = "Hello World, I am a Pixan agent."
+# The plugin's /start handler: `await ctx.reply(<pairing instructions>)`. The agent is
+# already paired with its owner by the kernel, so those instructions would only confuse.
+START_RE = re.compile(r"(bot\.command\('start', async ctx => \{\n\s*if \(!dmCommandGate\(ctx\)\) return\n"
+                      r"\s*await ctx\.reply\()(.*?)(\)\n\}\))", re.S)
+
+
+def patch_start(path, text=None):
+    """/start answers `text` (default: env START_TEXT, else DEFAULT_START_TEXT).
+    Returns patched/already/no-anchor/missing."""
+    if not os.path.exists(path):
+        return "missing"
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    m = START_RE.search(src)
+    if not m:
+        return "no-anchor"
+    new = json.dumps(text or os.environ.get("START_TEXT", "").strip() or DEFAULT_START_TEXT)
+    if m.group(2).strip() == new:
+        return "already"
+    shutil.copy2(path, "%s.bak-%s-prestart" % (path, datetime.now().strftime("%Y%m%d-%H%M%S")))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src[:m.start(2)] + new + src[m.end(2):])
+    return "patched"
+
+
 def patch_all(cache_root):
     """Patch every version of the telegram plugin under a plugin cache."""
     pattern = os.path.join(cache_root, "*", "telegram", "*", "server.ts")
-    return [(p, "rich %s, stamp %s" % (patch(p), patch_stamp(p)))
+    return [(p, "rich %s, stamp %s, start %s" % (patch(p), patch_stamp(p), patch_start(p)))
             for p in sorted(glob.glob(pattern))]
 
 

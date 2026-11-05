@@ -27,6 +27,10 @@ check "no keys: says MISSING" grep -q 'MISSING credential' <<<"$out"
 out="$(docker run --rm --entrypoint bash "$img" -c 'echo "{}" > /etc/claude-code/managed-settings.json && /opt/kernel/entrypoint.sh' 2>&1)"
 check "tampered guards: refuses to boot" grep -q 'kernel guards were modified' <<<"$out"
 
+out="$(docker run --rm -e ANTHROPIC_API_KEY=sk-ant-fake -e TELEGRAM_BOT_TOKEN=fake -e OWNER_TELEGRAM_ID=42 -e STUB_CLAUDE=exit \
+  --entrypoint bash "$img" -c 'mkdir -p /opt/client && echo "{\"deny\":[\"Bash(curl *)\",\"WebFetch\"]}" > /opt/client/tenant-deny.json && /opt/kernel/entrypoint.sh' 2>&1)"
+check "tenant deny: client rules merged into settings" grep -q 'tenant deny: 2 rules' <<<"$out"
+
 docker run -d --name "$c" --network none \
   -e ANTHROPIC_API_KEY=sk-ant-fake -e TELEGRAM_BOT_TOKEN=fake -e OWNER_TELEGRAM_ID=42 \
   -e AGENT_NAME=l2 -e BOOT_WAIT_SEC=1 -e HEARTBEAT_SEC=1 "$img" >/dev/null
@@ -35,6 +39,18 @@ logs="$(docker logs "$c" 2>&1)"
 check "fake keys: reaches tmux and heartbeat" grep -q 'heartbeat OK' <<<"$logs"
 # shellcheck disable=SC2016
 check "claude runs as agent, not root" docker exec -u agent "$c" bash -c '[ "$(stat -c %U "/proc/$(tmux -L l2 list-panes -F "#{pane_pid}")")" = agent ]'
+check "smoke.sh passes inside the container" docker exec -u agent "$c" /opt/kernel/smoke.sh
+# Backup: encrypt to a throwaway key, decrypt, and the secret planted in the workspace is gone.
+# shellcheck disable=SC2016
+check "backup: encrypted, restorable, secrets filtered" docker exec -u agent "$c" bash -c '
+  set -e; age-keygen -o /tmp/k 2>/dev/null; r="$(age-keygen -y /tmp/k)"
+  echo "token sk-ant-api03-PLANTEDPLANTEDPLANTEDPLANTED" > /data/workspace/notes.md
+  BACKUP_AGE_RECIPIENT="$r" python3 /opt/kernel/bin/backup.py now
+  f="$(ls /data/backups/*.tar.age | tail -n1)"; mkdir -p /tmp/r
+  age -d -i /tmp/k "$f" | tar -x -C /tmp/r
+  grep -q REDACTED /tmp/r/workspace/notes.md && ! grep -rq PLANTED /tmp/r && ! grep -q PLANTED "$f"
+  test ! -e /tmp/r/config/.credentials.json && test ! -e /tmp/r/config/.claude.json'
+check "/start reply patch applies to the plugin" docker exec "$c" bash -c 'grep -q "Hello World, I am a Pixan agent." /data/config/plugins/cache/claude-plugins-official/telegram/*/server.ts || ! grep -q "bot.command(.start" /data/config/plugins/cache/claude-plugins-official/telegram/*/server.ts'
 check "baked plugin is copied to /data" docker exec "$c" bash -c 'compgen -G "/data/config/plugins/cache/claude-plugins-official/telegram/*/server.ts"'
 
 docker exec -u agent "$c" bash -c 'kill "$(tmux -L l2 list-panes -F "#{pane_pid}")"'

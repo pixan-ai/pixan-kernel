@@ -10,9 +10,20 @@
       "Bash(dd if=/dev/zero of=/dev/*)",
       "Read(**/.env)",
       "Read(**/.env.*)",
-      "Read(/data/config/.credentials.json)",
-      "Edit(/etc/claude-code/**)",
-      "Edit(/opt/kernel/**)"
+      "Read(//data/config/.credentials.json)",
+      "Edit(//data/config/.credentials.json)",
+      "Edit(//etc/claude-code/**)",
+      "Edit(//opt/kernel/**)",
+      "Edit(//opt/client/**)",
+      "Edit(//data/config/settings.json)",
+      "Edit(//data/config/channels/**)",
+      "Edit(//data/workspace/CLAUDE.md)",
+      "Edit(//data/workspace/SOUL.md)",
+      "Edit(//data/workspace/IDENTITY.md)",
+      "Edit(//data/workspace/USER.md)",
+      "Edit(//data/workspace/STACK.md)",
+      "Read(//data/backups/**)",
+      "Edit(//data/backups/**)"
     ]
   },
   "hooks": {
