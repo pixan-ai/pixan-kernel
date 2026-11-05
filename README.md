@@ -205,8 +205,9 @@ Based on Anthropic's [Development containers](https://docs.anthropic.com/en/docs
   Host names are resolved **once, at boot**: if a provider moves to new IPs, restart the container.
 - **Secrets**: never baked into images; the bot token file is `0600`; don't mount host `~/.ssh` — use
   scoped, short-lived tokens, as the same page recommends.
-- **Telegram access is owner-managed.** The agent cannot edit `/data/config/channels/**` (including
-  `access.json`), so a chat message can never talk it into adding people. The owner is allowed from
+- **Telegram access is owner-managed.** The agent's file tools cannot edit `/data/config/channels/**`
+  (including `access.json`), so a chat message cannot casually add people; a shell command still could (see
+  Limits of deny rules). The owner is allowed from
   `OWNER_TELEGRAM_ID` at first boot; to change who may talk to the bot, the owner edits `access.json` on the
   volume (e.g. `docker exec -u agent <container> vi /data/config/channels/telegram/access.json`). The plugin's
   `/telegram:access` pairing skill is meant for a person at the terminal, which an always-on agent has not.
@@ -239,7 +240,8 @@ model id) and the kernel writes `advisorModel` into the user settings at boot (t
 | L1 `tests/l1-unit.sh` | entrypoint with a stub `claude` | auth from `claude auth status` (OAuth, key, both, cloud), missing credential and missing baked plugin fail fast, no token in the pane env, boot order, seeding rules, setup-screen detection; heartbeat: zombie, hung Claude, no `bun server.ts`, dropped channel → exit 1; dead credential → one owner alert, no restart; session reset (idle, once, not while busy or queued); queue alert; backup round-trip and failure alert with secrets redacted |
 | L2 `tests/l2-docker.sh` | real image + stub client layer, `--network none` | image builds, kernel files are `root:644`, a modified kernel file refuses boot, baked plugin copied to `/data`, killed Claude → container exits 1; `smoke.sh` passes; encrypted backup restores and has no planted secret; tenant deny rules merged |
 
-CI runs all three on every PR; pushes to `main` also publish `ghcr.io/pixan-ai/pixan-kernel`: the exact image L2 tested, not a rebuild.
+CI runs all three on every PR; pushes to `main` also publish `ghcr.io/pixan-ai/pixan-kernel`: the exact image L2 tested, not a rebuild. The image is public; tags are
+`:main` and `:sha-<commit>`. There is no `:latest` tag: pin by digest in client images.
 
 ## Roadmap
 
